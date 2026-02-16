@@ -18,6 +18,8 @@ HIGHRES_PATTERNS = [
     r"(\d{3,4})x(\d{3,4})", r"4k", r"uhd", r"2160", r"1440", r"1080",
     r"wallpaper", r"wp-content/uploads",
     r"raw", r"source", r"/max/",
+    r"hires", r"retina", r"[_-]2x", r"[_-]3x", r"[_-]xl",
+    r"full[_-]size", r"[_-]large", r"[_-]big", r"/orig/", r"[_-]orig\b",
 ]
 
 # Patterns to exclude (thumbnails, icons, UI elements)
@@ -29,6 +31,19 @@ EXCLUDE_PATTERNS = [
     r"btn", r"button", r"arrow", r"close", r"menu",
     r"1x1", r"spacer", r"blank", r"transparent",
     r"/thumb[s]?/", r"/small/", r"/preview/", r"/mini/",
+    r"[_-]t\.", r"[_-]sq\.", r"[_-]sm\.", r"[_-]xs\.",
+    r"\.th\.", r"/tiny/", r"/micro/",
+    r"/compressed/", r"/optimized/", r"/resized/",
+]
+
+# URL patterns for navigation/non-detail pages to skip in detail page detection
+NAV_EXCLUDE_PATTERNS = [
+    r"/categor(y|ies)/", r"/tags?/", r"/search", r"/sort", r"/filter",
+    r"/login", r"/register", r"/sign[_-]?up", r"/sign[_-]?in",
+    r"/about", r"/contact", r"/terms", r"/privacy", r"/faq", r"/help",
+    r"/cart", r"/checkout", r"/account", r"/settings", r"/profile",
+    r"/feed", r"/trending", r"/popular", r"/latest", r"/top/?$",
+    r"^/$", r"/index\.html?$",
 ]
 
 # Image extensions
@@ -158,24 +173,37 @@ class GenericAdapter(BaseAdapter):
 
         On gallery/listing pages, thumbnails are wrapped in <a> tags linking
         to individual pages where full-size images live.
+        Uses a permissive approach: accept any <a> wrapping an <img> on the
+        same domain, unless it matches navigation/category exclusion patterns.
         Returns list of {url, thumbnail_url, alt, title} dicts.
         """
         soup = BeautifulSoup(html, "lxml")
         links = []
         seen = set()
+        page_parsed = urlparse(page_url)
+        page_root = self._root_domain(page_parsed.netloc)
 
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
+            if not href or href.startswith("#") or href.startswith("javascript:"):
+                continue
+
             abs_url = urljoin(page_url, href)
 
             # Skip if it's an image file URL (we want page links, not images)
             if self._is_image_url(abs_url):
                 continue
-            # Skip external/social links
-            link_domain = urlparse(abs_url).netloc
-            page_domain = urlparse(page_url).netloc
-            if link_domain and page_domain and link_domain != page_domain:
+
+            # Skip external links (different root domain)
+            link_parsed = urlparse(abs_url)
+            link_root = self._root_domain(link_parsed.netloc)
+            if link_root and page_root and link_root != page_root:
                 continue
+
+            # Skip if same as current page
+            if abs_url.rstrip("/") == page_url.rstrip("/"):
+                continue
+
             if abs_url in seen:
                 continue
 
@@ -188,17 +216,9 @@ class GenericAdapter(BaseAdapter):
             if not thumb_src:
                 continue
 
-            # The link should look like a detail/wallpaper page
-            path = urlparse(abs_url).path.lower()
-            is_detail = bool(re.search(
-                r"/(w|wallpaper|photo|image|view|detail|pic|img|download|full)/",
-                path
-            ))
-            # Also accept single-segment paths like /w/abc123 or numeric IDs
-            if not is_detail:
-                is_detail = bool(re.search(r"/\w{1,3}/[a-z0-9]+$", path))
-
-            if not is_detail:
+            # Skip navigation/category/utility pages
+            path = link_parsed.path.lower()
+            if any(re.search(p, path) for p in NAV_EXCLUDE_PATTERNS):
                 continue
 
             seen.add(abs_url)
@@ -211,6 +231,14 @@ class GenericAdapter(BaseAdapter):
 
         logger.info(f"Found {len(links)} detail page links on {page_url}")
         return links
+
+    @staticmethod
+    def _root_domain(netloc: str) -> str:
+        """Extract root domain from netloc (e.g. 'th.wallhaven.cc' -> 'wallhaven.cc')."""
+        parts = netloc.lower().split(".")
+        if len(parts) >= 2:
+            return ".".join(parts[-2:])
+        return netloc.lower()
 
     async def get_next_page_url(self, html: str, current_url: str, page_num: int) -> Optional[str]:
         """Find pagination link for next page."""
@@ -268,7 +296,7 @@ class GenericAdapter(BaseAdapter):
                 score += 1
         # Penalize very short paths (likely thumbnails)
         path = urlparse(url).path
-        if len(path) < 15:
+        if len(path) < 10:
             score -= 1
         return max(0, score)
 

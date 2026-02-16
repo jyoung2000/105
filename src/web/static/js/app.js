@@ -589,6 +589,12 @@ async function loadSettings() {
             document.getElementById('set-max-pages').value = data.scraping.max_pages || 10;
             document.getElementById('set-page-delay').value = data.scraping.page_delay_seconds || 2;
             document.getElementById('set-max-dl').value = data.scraping.max_concurrent_downloads || 3;
+            // Aspect ratio filters
+            const allowedAspects = data.scraping.allowed_aspects || [];
+            document.querySelectorAll('.aspect-cb').forEach(cb => {
+                cb.checked = allowedAspects.includes(cb.value);
+            });
+            document.getElementById('set-allow-mobile').checked = data.scraping.allow_mobile !== false;
         }
         if (data.jpeg) document.getElementById('set-jpeg-quality').value = data.jpeg.quality || 85;
         if (data.scheduler) document.getElementById('set-check-interval').value = data.scheduler.check_interval_minutes || 5;
@@ -610,6 +616,8 @@ async function saveSettings() {
                     max_pages: parseInt(document.getElementById('set-max-pages').value),
                     page_delay_seconds: parseInt(document.getElementById('set-page-delay').value),
                     max_concurrent_downloads: parseInt(document.getElementById('set-max-dl').value),
+                    allowed_aspects: Array.from(document.querySelectorAll('.aspect-cb:checked')).map(cb => cb.value),
+                    allow_mobile: document.getElementById('set-allow-mobile').checked,
                 },
                 jpeg: { quality: parseInt(document.getElementById('set-jpeg-quality').value) },
                 scheduler: { check_interval_minutes: parseInt(document.getElementById('set-check-interval').value) },

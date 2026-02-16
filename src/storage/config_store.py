@@ -28,6 +28,8 @@ DEFAULT_CONFIG = {
         "download_delay_seconds": 1,
         "scroll_count": 5,
         "scroll_wait_ms": 800,
+        "allowed_aspects": [],
+        "allow_mobile": True,
     },
     "jpeg": {
         "quality": 85,

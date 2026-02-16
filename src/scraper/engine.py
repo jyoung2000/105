@@ -99,7 +99,12 @@ class ScraperEngine:
         """Get validator configured with current scraping settings."""
         min_w = config_store.get("scraping", "min_width", default=800)
         min_h = config_store.get("scraping", "min_height", default=600)
-        return ImageValidator(min_width=min_w, min_height=min_h)
+        allowed_aspects = config_store.get("scraping", "allowed_aspects", default=[])
+        allow_mobile = config_store.get("scraping", "allow_mobile", default=True)
+        return ImageValidator(
+            min_width=min_w, min_height=min_h,
+            allowed_aspects=allowed_aspects, allow_mobile=allow_mobile,
+        )
 
     async def initialize(self):
         """Initialize engine components (non-fatal)."""
@@ -198,16 +203,20 @@ class ScraperEngine:
             images = await adapter.scrape(html, current_url)
             logger.info(f"Found {len(images)} direct images on page {page_num}")
 
-            # If no direct high-res images, try following detail page links
-            if not images:
-                detail_links = adapter.get_detail_page_links(html, current_url)
-                if detail_links:
-                    logger.info(f"No direct images found, following {len(detail_links)} detail page links")
-                    detail_images = await self._scrape_detail_pages(
-                        detail_links, adapter, job, scroll_count, scroll_wait
-                    )
-                    images = detail_images
-                    logger.info(f"Found {len(images)} images from detail pages")
+            # Always check for detail page links — listing pages have thumbnails
+            # linking to detail pages where full-size images live
+            detail_links = adapter.get_detail_page_links(html, current_url)
+            if detail_links:
+                logger.info(f"Found {len(detail_links)} detail page links on page {page_num}")
+                found_urls = {img.url for img in images}
+                detail_images = await self._scrape_detail_pages(
+                    detail_links, adapter, job, scroll_count, scroll_wait
+                )
+                for img in detail_images:
+                    if img.url not in found_urls:
+                        images.append(img)
+                        found_urls.add(img.url)
+                logger.info(f"Total images after detail pages: {len(images)}")
 
             job.images_found += len(images)
 

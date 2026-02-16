@@ -168,6 +168,26 @@
                 </div>
             </div>
             <div class="card">
+                <div class="card-title">Aspect Ratio Filters</div>
+                <p style="font-size:0.85rem;color:var(--text-secondary);margin:0 0 0.8rem 0">Select which aspect ratios to accept. Leave all unchecked to accept all ratios.</p>
+                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:0.5rem" id="aspect-checkboxes">
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="16:9" class="aspect-cb"> 16:9 (Widescreen)</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="16:10" class="aspect-cb"> 16:10</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="21:9" class="aspect-cb"> 21:9 (Ultrawide)</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="32:9" class="aspect-cb"> 32:9 (Super UW)</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="4:3" class="aspect-cb"> 4:3</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="3:2" class="aspect-cb"> 3:2</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="5:4" class="aspect-cb"> 5:4</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="1:1" class="aspect-cb"> 1:1 (Square)</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="9:16" class="aspect-cb"> 9:16 (Mobile)</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="9:19" class="aspect-cb"> 9:19 (Mobile)</label>
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="9:20" class="aspect-cb"> 9:20 (Mobile)</label>
+                </div>
+                <div style="margin-top:0.8rem">
+                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" id="set-allow-mobile" checked> Allow mobile/portrait wallpapers</label>
+                </div>
+            </div>
+            <div class="card">
                 <div class="card-title">Scraping</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
                     <div class="form-group"><label>Max Pages</label><input type="number" id="set-max-pages" value="10"></div>
