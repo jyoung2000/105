@@ -74,6 +74,7 @@ class DiscoveryQuery(BaseModel):
     builtin: bool = False
     times_used: int = 0
     sources_found: int = 0
+    sources_productive: int = 0
     last_used: Optional[str] = None
     added_at: str = ""
 
@@ -182,7 +183,8 @@ class SourceManager:
         return None
 
     def add_source(self, url: str, name: str = "", category: str = "user",
-                   schedule_hours: int = 12, discovered_by_query: str = "") -> dict:
+                   schedule_hours: int = 12, discovered_by_query: str = "",
+                   validation_score: float = 0.0) -> dict:
         """Add a new source."""
         if not self._loaded:
             self.load()
@@ -195,6 +197,7 @@ class SourceManager:
             domain=domain,
             category=category,
             schedule_hours=schedule_hours,
+            validation_score=validation_score,
             discovered_at=datetime.now().isoformat(),
             discovered_by_query=discovered_by_query,
         )
@@ -311,15 +314,34 @@ class SourceManager:
         return None
 
     def get_next_query(self) -> Optional[dict]:
-        """Get next enabled query using rotation."""
+        """Get next enabled query using weighted selection based on effectiveness."""
+        import random
         if not self._loaded:
             self.load()
         enabled = [q for q in self._queries if q.get("enabled", True)]
         if not enabled:
             return None
-        idx = self._discovery.get("query_index", 0) % len(enabled)
-        query = enabled[idx]
-        self._discovery["query_index"] = (idx + 1) % len(enabled)
+
+        weights = []
+        for q in enabled:
+            times = q.get("times_used", 0)
+            found = q.get("sources_found", 0)
+            productive = q.get("sources_productive", 0)
+
+            # Base weight ensures every query gets a chance
+            weight = 1.0
+            if times > 0:
+                find_rate = found / times
+                weight += find_rate * 2.0
+                if found > 0:
+                    productive_rate = productive / found
+                    weight += productive_rate * 3.0
+            else:
+                # Untried queries get exploration bonus
+                weight += 0.5
+            weights.append(weight)
+
+        query = random.choices(enabled, weights=weights, k=1)[0]
         self.save()
         return query
 
@@ -330,6 +352,42 @@ class SourceManager:
                 q["times_used"] = q.get("times_used", 0) + 1
                 q["sources_found"] = q.get("sources_found", 0) + sources_found
                 q["last_used"] = datetime.now().isoformat()
+                self.save()
+                return
+
+    # === Source quality + learning ===
+
+    def compute_source_quality(self, source_id: str) -> float:
+        """Compute a quality score (0-100) for a source based on its history."""
+        source = self.get_source(source_id)
+        if not source:
+            return 0.0
+        total_scraped = source.get("total_scraped", 0)
+        total_uploaded = source.get("total_uploaded", 0)
+        total_errors = source.get("total_errors", 0)
+        consecutive_failures = source.get("consecutive_failures", 0)
+
+        if total_scraped == 0:
+            return 50.0  # Unknown, neutral score
+
+        upload_ratio = total_uploaded / max(total_scraped, 1)
+        error_ratio = total_errors / max(total_scraped, 1)
+        failure_penalty = min(consecutive_failures * 10, 50)
+
+        score = (upload_ratio * 60) + (1 - error_ratio) * 20 + 20 - failure_penalty
+        return max(0.0, min(100.0, score))
+
+    def record_source_productive(self, source_id: str):
+        """Mark the query that discovered a source as having produced a productive source."""
+        source = self.get_source(source_id)
+        if not source:
+            return
+        discovered_by = source.get("discovered_by_query", "")
+        if not discovered_by:
+            return
+        for q in self._queries:
+            if q["query"] == discovered_by:
+                q["sources_productive"] = q.get("sources_productive", 0) + 1
                 self.save()
                 return
 

@@ -11,12 +11,13 @@ logger = setup_logging("generic_adapter")
 # Minimum dimensions to consider an image a wallpaper
 MIN_WIDTH = 800
 MIN_HEIGHT = 600
-MIN_AREA = MIN_WIDTH * MIN_HEIGHT
 
 # URL patterns that suggest high-resolution images
 HIGHRES_PATTERNS = [
     r"original", r"full", r"download", r"highres", r"large",
     r"(\d{3,4})x(\d{3,4})", r"4k", r"uhd", r"2160", r"1440", r"1080",
+    r"wallpaper", r"wall", r"wp-content/uploads",
+    r"raw", r"source", r"max",
 ]
 
 # Patterns to exclude (thumbnails, icons, UI elements)
@@ -45,7 +46,6 @@ class GenericAdapter(BaseAdapter):
         soup = BeautifulSoup(html, "lxml")
         images = []
         seen_urls = set()
-        base_domain = urlparse(page_url).netloc
 
         # Strategy 1: Find direct high-res image links
         for link in soup.find_all("a", href=True):
@@ -75,7 +75,7 @@ class GenericAdapter(BaseAdapter):
             if abs_url in seen_urls:
                 continue
 
-            # Check for high-res sources in srcset or data attributes
+            # Check for high-res sources in srcset, picture, or data attributes
             highres_src = self._find_highres_source(img, page_url)
             if highres_src:
                 abs_url = highres_src
@@ -107,6 +107,46 @@ class GenericAdapter(BaseAdapter):
                         seen_urls.add(url)
                         images.append(self._make_image(url, "", "", "", page_url, elem, score))
 
+        # Strategy 4: <noscript> fallbacks (often contain original image URLs)
+        for noscript in soup.find_all("noscript"):
+            try:
+                inner = BeautifulSoup(str(noscript), "lxml")
+                for img in inner.find_all("img"):
+                    src = img.get("src", "")
+                    if not src:
+                        continue
+                    abs_url = urljoin(page_url, src)
+                    if abs_url in seen_urls or not self._is_image_url(abs_url):
+                        continue
+                    if self._is_excluded(abs_url):
+                        continue
+                    score = self._score_url(abs_url)
+                    width = self._parse_dim(img.get("width", ""))
+                    height = self._parse_dim(img.get("height", ""))
+                    if score >= 2 or (width >= self.min_width and height >= self.min_height):
+                        seen_urls.add(abs_url)
+                        alt = img.get("alt", "") or ""
+                        title = img.get("title", "") or alt
+                        images.append(self._make_image(abs_url, "", alt, title, page_url, img, score, width, height))
+            except Exception:
+                continue
+
+        # Strategy 5: data-download, data-wallpaper, and other site-specific data attributes
+        for attr_name in ["data-download", "data-wallpaper", "data-full-src", "data-image", "data-href"]:
+            for elem in soup.find_all(attrs={attr_name: True}):
+                url = elem.get(attr_name, "")
+                if not url:
+                    continue
+                abs_url = urljoin(page_url, url)
+                if abs_url in seen_urls or not self._is_image_url(abs_url):
+                    continue
+                if self._is_excluded(abs_url):
+                    continue
+                seen_urls.add(abs_url)
+                # Download/wallpaper data attributes get a bonus score
+                score = self._score_url(abs_url) + 2
+                images.append(self._make_image(abs_url, "", "", "", page_url, elem, score))
+
         # Sort by score (highest first) and return
         images.sort(key=lambda x: x.width * x.height if x.width and x.height else 0, reverse=True)
         logger.info(f"Found {len(images)} potential wallpapers on {page_url}")
@@ -126,8 +166,8 @@ class GenericAdapter(BaseAdapter):
                 "next" in text
                 or "next" in classes
                 or "next" in rel
-                or "»" in text
-                or "›" in text
+                or "\u00bb" in text
+                or "\u203a" in text
                 or ">" == text
             ):
                 href = link.get("href", "")
@@ -135,7 +175,6 @@ class GenericAdapter(BaseAdapter):
                     return urljoin(current_url, href)
 
         # Strategy 2: Look for page number links
-        parsed = urlparse(current_url)
         current_page_match = re.search(r"[?&]page=(\d+)", current_url)
         if current_page_match:
             next_num = int(current_page_match.group(1)) + 1
@@ -174,31 +213,58 @@ class GenericAdapter(BaseAdapter):
         return max(0, score)
 
     def _find_highres_source(self, img, page_url: str) -> Optional[str]:
-        """Look for higher-resolution versions in srcset or data attributes."""
+        """Look for higher-resolution versions in srcset, picture, or data attributes."""
+        # Check parent <picture> element first
+        if img.parent and img.parent.name == "picture":
+            for source_elem in img.parent.find_all("source"):
+                srcset = source_elem.get("srcset", "")
+                best = self._parse_srcset(srcset, page_url)
+                if best:
+                    return best
+
+        # Check srcset on the img itself
         srcset = img.get("srcset", "")
         if srcset:
-            candidates = []
-            for entry in srcset.split(","):
-                parts = entry.strip().split()
-                if len(parts) >= 1:
-                    url = urljoin(page_url, parts[0])
-                    width = 0
-                    if len(parts) >= 2 and parts[1].endswith("w"):
-                        try:
-                            width = int(parts[1][:-1])
-                        except ValueError:
-                            pass
-                    candidates.append((url, width))
-            if candidates:
-                candidates.sort(key=lambda x: x[1], reverse=True)
-                return candidates[0][0]
+            best = self._parse_srcset(srcset, page_url)
+            if best:
+                return best
 
         # Check data attributes for high-res
-        for attr in ["data-src", "data-original", "data-full", "data-large", "data-zoom"]:
+        for attr in ["data-src", "data-original", "data-full", "data-large",
+                     "data-zoom", "data-hires", "data-raw-src", "data-2x"]:
             val = img.get(attr, "")
             if val:
                 return urljoin(page_url, val)
 
+        return None
+
+    def _parse_srcset(self, srcset: str, page_url: str) -> Optional[str]:
+        """Parse srcset attribute and return the highest-resolution URL."""
+        if not srcset:
+            return None
+        candidates = []
+        for entry in srcset.split(","):
+            parts = entry.strip().split()
+            if not parts:
+                continue
+            url = urljoin(page_url, parts[0])
+            sort_val = 0
+            if len(parts) >= 2:
+                descriptor = parts[1]
+                if descriptor.endswith("w"):
+                    try:
+                        sort_val = int(descriptor[:-1])
+                    except ValueError:
+                        pass
+                elif descriptor.endswith("x"):
+                    try:
+                        sort_val = int(float(descriptor[:-1]) * 1000)
+                    except ValueError:
+                        pass
+            candidates.append((url, sort_val))
+        if candidates:
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            return candidates[0][0]
         return None
 
     def _parse_dim(self, val: str) -> int:

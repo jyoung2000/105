@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from src.scraper.browser import browser_manager
 from src.scraper.adapters.generic import GenericAdapter
 from src.scheduler.source_manager import source_manager
+from src.storage.config_store import config_store
 from src.utils.logging import setup_logging
 
 logger = setup_logging("discovery")
@@ -22,9 +23,14 @@ class DiscoveryEngine:
     """Discovers new wallpaper sources by searching the web."""
 
     def __init__(self):
-        self.adapter = GenericAdapter()
         self._running = False
         self._last_results: list[dict] = []
+
+    def _get_adapter(self) -> GenericAdapter:
+        """Get adapter configured with current settings."""
+        min_w = config_store.get("scraping", "min_width", default=800)
+        min_h = config_store.get("scraping", "min_height", default=600)
+        return GenericAdapter(min_width=min_w, min_height=min_h)
 
     async def run_discovery(self) -> list[dict]:
         """Run one discovery cycle: pick query, search, validate, add sources."""
@@ -81,6 +87,7 @@ class DiscoveryEngine:
                             name=f"{domain} (discovered)",
                             category="discovered",
                             discovered_by_query=query_text,
+                            validation_score=score,
                         )
                         result["added"] = True
                         result["source_id"] = source["id"]
@@ -104,6 +111,13 @@ class DiscoveryEngine:
             self._last_results = results[-10:]
             logger.info(f"Discovery complete: {new_sources} new sources from '{query_text}'")
 
+            # Auto-generate new queries based on productive discoveries
+            if new_sources > 0:
+                try:
+                    self._generate_new_queries()
+                except Exception as e:
+                    logger.warning(f"Query generation failed: {e}")
+
         except Exception as e:
             logger.error(f"Discovery error: {e}")
         finally:
@@ -114,13 +128,14 @@ class DiscoveryEngine:
     async def _validate_source(self, url: str) -> float:
         """Validate a URL as a wallpaper source. Returns score."""
         try:
+            adapter = self._get_adapter()
             html = await browser_manager.get_page_content(url, wait_time=4000)
-            images = await self.adapter.scrape(html, url)
+            images = await adapter.scrape(html, url)
 
             score = len(images)
 
             # Pagination bonus
-            next_page = await self.adapter.get_next_page_url(html, url, 1)
+            next_page = await adapter.get_next_page_url(html, url, 1)
             if next_page:
                 score *= 1.5
 
@@ -129,6 +144,32 @@ class DiscoveryEngine:
         except Exception as e:
             logger.debug(f"Validation failed for {url}: {e}")
             return 0
+
+    def _generate_new_queries(self):
+        """Generate new search queries based on productive discovered sources."""
+        sources = source_manager.get_all_sources()
+        discovered = [s for s in sources if s.get("category") == "discovered"
+                      and s.get("total_uploaded", 0) > 0]
+        if not discovered:
+            return
+
+        existing_queries = {q["query"].lower() for q in source_manager.get_all_queries()}
+
+        for source in discovered[:5]:
+            domain = source.get("domain", "")
+            if not domain:
+                continue
+            candidates = [
+                f"sites like {domain} wallpaper",
+                f"wallpaper sites similar to {domain}",
+                f"{domain} alternatives free wallpaper",
+            ]
+            for candidate in candidates:
+                if candidate.lower() not in existing_queries:
+                    source_manager.add_query(candidate)
+                    existing_queries.add(candidate.lower())
+                    logger.info(f"Auto-generated query: '{candidate}'")
+                    break  # One new query per productive source
 
     @property
     def is_running(self) -> bool:

@@ -80,15 +80,25 @@ class ScraperEngine:
     """Main scraper engine orchestrating the full pipeline."""
 
     def __init__(self):
-        self.adapter = GenericAdapter()
         self.downloader = DownloadManager()
         self.compressor = ImageCompressor()
-        self.validator = ImageValidator()
         self.captioner = AICaptioner()
         self.baserow = BaserowClient()
         self._job_lock = asyncio.Lock()
         self._current_job: Optional[ScrapeJob] = None
         self._job_history: list[dict] = []
+
+    def _get_adapter(self) -> GenericAdapter:
+        """Get adapter configured with current scraping settings."""
+        min_w = config_store.get("scraping", "min_width", default=800)
+        min_h = config_store.get("scraping", "min_height", default=600)
+        return GenericAdapter(min_width=min_w, min_height=min_h)
+
+    def _get_validator(self) -> ImageValidator:
+        """Get validator configured with current scraping settings."""
+        min_w = config_store.get("scraping", "min_width", default=800)
+        min_h = config_store.get("scraping", "min_height", default=600)
+        return ImageValidator(min_width=min_w, min_height=min_h)
 
     async def initialize(self):
         """Initialize engine components (non-fatal)."""
@@ -164,26 +174,34 @@ class ScraperEngine:
                 job.error_log.append("Browser not available")
                 return
 
+        # Create adapter/validator from current config each run
+        adapter = self._get_adapter()
+        validator = self._get_validator()
+        scroll_count = config_store.get("scraping", "scroll_count", default=5)
+        scroll_wait = config_store.get("scraping", "scroll_wait_ms", default=800)
+
         current_url = job.url
         for page_num in range(1, job.max_pages + 1):
             logger.info(f"Scraping page {page_num}: {current_url}")
             job.pages_scraped = page_num
 
             try:
-                html = await browser_manager.get_page_content(current_url)
+                html = await browser_manager.get_page_content(
+                    current_url, scroll_count=scroll_count, scroll_wait_ms=scroll_wait
+                )
             except Exception as e:
                 logger.error(f"Failed to load page {current_url}: {e}")
                 job.error_log.append(f"Page load failed: {e}")
                 break
 
-            images = await self.adapter.scrape(html, current_url)
+            images = await adapter.scrape(html, current_url)
             job.images_found += len(images)
             logger.info(f"Found {len(images)} images on page {page_num}")
 
             # Process images
             for i, img in enumerate(images):
                 try:
-                    result = await self._process_image(img, job)
+                    result = await self._process_image(img, job, validator)
                     if result.status == "uploaded":
                         job.images_uploaded += 1
                     elif result.status == "duplicate":
@@ -202,7 +220,7 @@ class ScraperEngine:
 
             # Try to find next page
             try:
-                next_url = await self.adapter.get_next_page_url(html, current_url, page_num)
+                next_url = await adapter.get_next_page_url(html, current_url, page_num)
                 if not next_url:
                     logger.info("No more pages found")
                     break
@@ -213,10 +231,12 @@ class ScraperEngine:
             # Small delay between pages
             await asyncio.sleep(2)
 
-    async def _process_image(self, img, job: ScrapeJob) -> ScrapeResult:
+    async def _process_image(self, img, job: ScrapeJob, validator: ImageValidator = None) -> ScrapeResult:
         """Process a single image through the full pipeline."""
         result = ScrapeResult()
         temp_files = []
+        if validator is None:
+            validator = self._get_validator()
 
         try:
             # Download
@@ -228,7 +248,7 @@ class ScraperEngine:
             job.images_downloaded += 1
 
             # Validate
-            is_valid, reason = self.validator.validate(dl_path)
+            is_valid, reason = validator.validate(dl_path)
             if not is_valid:
                 result.error = f"Validation failed: {reason}"
                 return result

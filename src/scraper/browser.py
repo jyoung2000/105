@@ -57,16 +57,17 @@ class BrowserManager:
                 raise RuntimeError("Browser not available")
         return await self._context.new_page()
 
-    async def get_page_content(self, url: str, wait_time: int = 3000) -> str:
+    async def get_page_content(self, url: str, wait_time: int = 3000,
+                               scroll_count: int = 5, scroll_wait_ms: int = 800) -> str:
         """Navigate to URL and return page HTML content."""
         page = await self.get_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(wait_time)
             # Scroll to trigger lazy loading
-            for _ in range(3):
+            for _ in range(scroll_count):
                 await page.evaluate("window.scrollBy(0, window.innerHeight)")
-                await page.wait_for_timeout(500)
+                await page.wait_for_timeout(scroll_wait_ms)
             await page.evaluate("window.scrollTo(0, 0)")
             await page.wait_for_timeout(500)
             return await page.content()

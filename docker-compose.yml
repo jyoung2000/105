@@ -10,7 +10,11 @@ services:
       - TZ=America/Chicago
     volumes:
       - ./data:/app/data
+      - scraper-fallback:/tmp/scraper-data
     restart: unless-stopped
     mem_limit: 6g
     memswap_limit: 6g
     cpus: "6.0"
+
+volumes:
+  scraper-fallback:

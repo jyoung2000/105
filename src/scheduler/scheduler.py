@@ -92,8 +92,11 @@ class Scheduler:
                 except (ValueError, TypeError):
                     pass
 
-            # Check health
+            # Auto-disable sources with too many consecutive failures
             if source.get("consecutive_failures", 0) >= 5:
+                if source.get("enabled", True):
+                    source_manager.update_source(source["id"], enabled=False)
+                    logger.info(f"Auto-disabled source {source.get('name')}: too many consecutive failures")
                 continue
 
             if not source.get("enabled", True):
@@ -114,6 +117,23 @@ class Scheduler:
                     dupes=job.duplicates,
                     errors=job.errors,
                 )
+
+                # Adaptive scheduling based on source quality
+                try:
+                    if job.images_uploaded > 0:
+                        source_manager.record_source_productive(source["id"])
+                        quality = source_manager.compute_source_quality(source["id"])
+                        if quality >= 70:
+                            new_hours = max(4, source.get("schedule_hours", 12) - 2)
+                            source_manager.update_source(source["id"], schedule_hours=new_hours)
+                    elif job.images_found == 0:
+                        quality = source_manager.compute_source_quality(source["id"])
+                        if quality < 20:
+                            new_hours = min(72, source.get("schedule_hours", 12) * 2)
+                            source_manager.update_source(source["id"], schedule_hours=new_hours)
+                except Exception as e:
+                    logger.debug(f"Adaptive scheduling error: {e}")
+
             except Exception as e:
                 logger.error(f"Scheduled scrape failed for {source.get('name')}: {e}")
                 source_manager.record_scrape(source["id"], 0, 0, 1)

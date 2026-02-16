@@ -26,6 +26,8 @@ DEFAULT_CONFIG = {
         "page_delay_seconds": 2,
         "max_concurrent_downloads": 3,
         "download_delay_seconds": 1,
+        "scroll_count": 5,
+        "scroll_wait_ms": 800,
     },
     "jpeg": {
         "quality": 85,

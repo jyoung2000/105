@@ -40,9 +40,13 @@ else
         rm -f /app/data/config/.write_test
         echo "Permissions fixed after retry"
     else
-        echo "WARN: Permission fix failed — app will use fallback paths"
+        echo "WARN: Permission fix failed — app will use fallback paths (/tmp/scraper-data)"
     fi
 fi
+
+# Ensure fallback directory is ready in case the app needs it
+mkdir -p /tmp/scraper-data/{logs,config,temp,wallpapers,thumbnails} 2>/dev/null || true
+chown -R "$PUID:$PGID" /tmp/scraper-data 2>/dev/null || true
 
 chown -R "$PUID:$PGID" /app/src 2>/dev/null || true
 chown -R "$PUID:$PGID" /opt/playwright-browsers 2>/dev/null || true
