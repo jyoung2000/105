@@ -62,14 +62,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Scraper engine init failed (non-fatal): {e}")
 
-    # Initialize seeds if Baserow is configured and no sources exist
+    # Initialize seed sources and discovery queries (always, not gated on Baserow)
     try:
-        from src.storage.config_store import config_store
         from src.scheduler.source_manager import source_manager
-        cfg = config_store.get_section("baserow")
-        if cfg.get("api_token"):
-            source_manager.initialize_seeds()
-            logger.info("Seeds initialized")
+        source_manager.initialize_seeds()
+        logger.info("Seeds initialized")
     except Exception as e:
         logger.warning(f"Seed initialization failed (non-fatal): {e}")
 
