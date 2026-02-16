@@ -3,6 +3,7 @@ let galleryOffset = 0;
 const GALLERY_LIMIT = 50;
 let galleryPolling = null;
 let jobsPolling = null;
+let sourcesPolling = null;
 let tableFieldsCache = [];
 let currentMapping = {};
 
@@ -21,7 +22,7 @@ function onTabSwitch(tab) {
     stopPolling();
     if (tab === 'gallery') { loadGallerySummary(); loadGallery(); startGalleryPolling(); }
     if (tab === 'scrape') { checkBaserowStatus(); loadScrapeJobs(); }
-    if (tab === 'sources') { loadSources(); loadQueries(); loadSchedulerStatus(); }
+    if (tab === 'sources') { loadSources(); loadQueries(); loadSchedulerStatus(); loadLiveStatus(); startSourcesPolling(); }
     if (tab === 'jobs') { loadJobs(); startJobsPolling(); }
     if (tab === 'settings') { loadSettings(); }
     if (tab === 'baserow') { loadBaserowConfig(); }
@@ -31,6 +32,7 @@ function onTabSwitch(tab) {
 function stopPolling() {
     if (galleryPolling) { clearInterval(galleryPolling); galleryPolling = null; }
     if (jobsPolling) { clearInterval(jobsPolling); jobsPolling = null; }
+    if (sourcesPolling) { clearInterval(sourcesPolling); sourcesPolling = null; }
 }
 
 // === API Helper ===
@@ -116,7 +118,7 @@ async function loadActivityFeed() {
         const data = await api('/api/gallery?limit=20');
         const feed = document.getElementById('activity-feed');
         if (!data.entries || data.entries.length === 0) {
-            feed.innerHTML = '<div class="empty-state"><div class="empty-state-text">No activity yet</div><div class="empty-state-hint">Configure Baserow and start scraping!</div></div>';
+            feed.innerHTML = '<div class="empty-state"><div class="empty-state-text">No activity yet</div><div class="empty-state-hint">Start scraping to see activity here.</div></div>';
             return;
         }
         feed.innerHTML = data.entries.map(e => `
@@ -150,7 +152,7 @@ async function loadGallery() {
         loadActivityFeed();
         loadSourceFilter();
     } catch (e) {
-        document.getElementById('gallery-grid').innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128444;</div><div class="empty-state-text">No wallpapers yet</div><div class="empty-state-hint">Go to the Baserow tab to connect, then start scraping!</div></div>';
+        document.getElementById('gallery-grid').innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128444;</div><div class="empty-state-text">No wallpapers yet</div><div class="empty-state-hint">No wallpapers yet. Start scraping from the Sources tab!</div></div>';
     }
 }
 
@@ -173,7 +175,7 @@ async function loadMoreGallery() {
 function renderGalleryGrid(entries, append) {
     const grid = document.getElementById('gallery-grid');
     if (!entries || entries.length === 0) {
-        if (!append) grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128444;</div><div class="empty-state-text">No wallpapers yet</div><div class="empty-state-hint">Go to the Baserow tab to connect, then start scraping!</div></div>';
+        if (!append) grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128444;</div><div class="empty-state-text">No wallpapers yet</div><div class="empty-state-hint">No wallpapers yet. Start scraping from the Sources tab!</div></div>';
         return;
     }
     const html = entries.map(e => `
@@ -299,17 +301,18 @@ async function loadSources() {
         const data = await api('/api/sources');
         const tbody = document.getElementById('sources-table');
         if (!data.sources || data.sources.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No sources. Configure Baserow first.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No sources configured. Add sources or wait for discovery.</td></tr>';
             return;
         }
         tbody.innerHTML = data.sources.map(s => `
             <tr>
                 <td><label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSource('${s.id}')"><span class="toggle-slider"></span></label></td>
+                <td><span class="badge badge-idle" id="source-status-${s.id}">idle</span></td>
                 <td>${esc(s.name)}<br><span style="font-size:0.7rem;color:var(--text-muted)">${esc(s.domain || '')}</span></td>
                 <td><span class="badge badge-${s.category}">${s.category}</span></td>
                 <td>${s.schedule_hours}h</td>
                 <td>${timeAgo(s.last_scraped)}</td>
-                <td>${s.last_scrape_count || 0} uploaded</td>
+                <td><span class="countdown" id="source-next-${s.id}">--</span></td>
                 <td>${s.total_uploaded || 0} / ${s.total_dupes || 0} / ${s.total_errors || 0}</td>
                 <td><span class="status-dot ${(s.consecutive_failures || 0) < 5 ? 'healthy' : 'unhealthy'}"></span></td>
                 <td>
@@ -318,6 +321,8 @@ async function loadSources() {
                 </td>
             </tr>
         `).join('');
+        // Immediately populate live status badges
+        loadLiveStatus();
     } catch (e) {}
 }
 
@@ -456,6 +461,87 @@ async function toggleScheduler() {
         toast(`Scheduler ${isPaused ? 'resumed' : 'paused'}`, 'success');
         loadSchedulerStatus();
     } catch (e) { toast('Failed', 'error'); }
+}
+
+// ==================== LIVE STATUS ====================
+function startSourcesPolling() {
+    sourcesPolling = setInterval(loadLiveStatus, 5000);
+}
+
+async function loadLiveStatus() {
+    try {
+        const data = await api('/api/status/live');
+
+        // Update scraping banner
+        const banner = document.getElementById('scraping-banner');
+        if (banner) {
+            if (data.current_job && data.current_job.status === 'running') {
+                banner.style.display = '';
+                const j = data.current_job;
+                document.getElementById('scraping-banner-title').textContent =
+                    'Currently Scraping: ' + (j.source_name || j.url || 'Unknown');
+                document.getElementById('scraping-banner-detail').textContent =
+                    'Page ' + (j.pages_scraped || 0) + '/' + (j.max_pages || '?') + ' | ' + (j.images_found || 0) + ' images found';
+                document.getElementById('scraping-banner-progress-bar').style.width = (j.progress || 0) + '%';
+                document.getElementById('scraping-banner-stats').textContent =
+                    (j.images_uploaded || 0) + ' uploaded, ' + (j.duplicates || 0) + ' dupes, ' + (j.errors || 0) + ' errors';
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        // Update discovery banner
+        const discDot = document.getElementById('discovery-dot');
+        const discText = document.getElementById('discovery-text');
+        const discNext = document.getElementById('discovery-next');
+        if (discDot && discText) {
+            if (data.discovery_running) {
+                discDot.className = 'status-dot healthy';
+                discText.textContent = 'Discovery: Running...';
+                if (discNext) discNext.textContent = '';
+            } else {
+                discDot.className = 'status-dot idle';
+                const browserOk = data.browser_available;
+                discText.textContent = browserOk ? 'Discovery: Idle' : 'Discovery: Browser not available';
+                if (discNext) {
+                    if (data.next_discovery) {
+                        discNext.textContent = 'Next run: ' + formatCountdown(data.next_discovery);
+                    } else {
+                        discNext.textContent = 'Next run: Pending (first run)';
+                    }
+                }
+            }
+        }
+
+        // Update per-source status badges
+        if (data.sources_status) {
+            for (const ss of data.sources_status) {
+                const badge = document.getElementById('source-status-' + ss.id);
+                if (badge) {
+                    badge.className = 'badge badge-' + ss.status;
+                    badge.textContent = ss.status;
+                }
+                const nextEl = document.getElementById('source-next-' + ss.id);
+                if (nextEl) {
+                    if (ss.next_scrape) {
+                        nextEl.textContent = formatCountdown(ss.next_scrape);
+                    } else {
+                        nextEl.textContent = 'Pending';
+                    }
+                }
+            }
+        }
+    } catch (e) { console.error('Live status error:', e); }
+}
+
+function formatCountdown(isoDate) {
+    if (!isoDate) return '';
+    const diff = (new Date(isoDate).getTime() - Date.now()) / 1000;
+    if (diff <= 0) return 'Due now';
+    if (diff < 60) return Math.ceil(diff) + 's';
+    if (diff < 3600) return Math.ceil(diff / 60) + 'm';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ' + Math.ceil((diff % 3600) / 60) + 'm';
+    return Math.floor(diff / 86400) + 'd ' + Math.floor((diff % 86400) / 3600) + 'h';
 }
 
 // ==================== JOBS ====================

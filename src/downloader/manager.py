@@ -23,32 +23,40 @@ class DownloadManager:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
+            from src.scraper.browser import browser_manager
+            ua = browser_manager.current_user_agent
+
             self._client = httpx.AsyncClient(
                 http2=True,
                 follow_redirects=True,
                 timeout=httpx.Timeout(30.0, connect=10.0),
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+                    "User-Agent": ua,
+                    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Sec-Fetch-Dest": "image",
+                    "Sec-Fetch-Mode": "no-cors",
+                    "Sec-Fetch-Site": "cross-site",
                 },
             )
         return self._client
 
-    async def download(self, url: str) -> Optional[Path]:
+    async def download(self, url: str, referer: str = "") -> Optional[Path]:
         """Download image to temp dir, streaming to disk. Returns file path or None."""
         domain = urlparse(url).netloc
         try:
             await self.rate_limiter.acquire(domain)
             try:
-                return await self._stream_download(url)
+                return await self._stream_download(url, referer)
             finally:
                 self.rate_limiter.release()
         except Exception as e:
             logger.error(f"Download failed for {url}: {e}")
             return None
 
-    async def _stream_download(self, url: str) -> Optional[Path]:
+    async def _stream_download(self, url: str, referer: str = "") -> Optional[Path]:
         """Stream download to a temp file."""
         client = await self._get_client()
         url_hash = hashlib.md5(url.encode()).hexdigest()[:16]
@@ -57,7 +65,11 @@ class DownloadManager:
 
         try:
             TEMP_DIR.mkdir(parents=True, exist_ok=True)
-            async with client.stream("GET", url) as response:
+            # Add Referer header per-request for proper hotlink handling
+            req_headers = {}
+            if referer:
+                req_headers["Referer"] = referer
+            async with client.stream("GET", url, headers=req_headers) as response:
                 response.raise_for_status()
                 content_length = int(response.headers.get("content-length", 0))
                 if content_length > MAX_FILE_SIZE:

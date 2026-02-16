@@ -1,6 +1,7 @@
 """Scraper engine — full pipeline from URL to Baserow."""
 import uuid
 import asyncio
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -228,8 +229,8 @@ class ScraperEngine:
             except Exception:
                 break
 
-            # Small delay between pages
-            await asyncio.sleep(2)
+            # Randomized delay between pages (2-4s)
+            await asyncio.sleep(2 + random.random() * 2)
 
     async def _process_image(self, img, job: ScrapeJob, validator: ImageValidator = None) -> ScrapeResult:
         """Process a single image through the full pipeline."""
@@ -239,8 +240,8 @@ class ScraperEngine:
             validator = self._get_validator()
 
         try:
-            # Download
-            dl_path = await self.downloader.download(img.url)
+            # Download (with referer for hotlink protection)
+            dl_path = await self.downloader.download(img.url, referer=img.page_url)
             if dl_path is None:
                 result.error = "Download failed"
                 return result

@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 playwright
+playwright-stealth
 httpx[http2]
 beautifulsoup4
 lxml

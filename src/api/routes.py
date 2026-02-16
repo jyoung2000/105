@@ -234,7 +234,10 @@ async def delete_query(query_id: str):
 
 @router.get("/scheduler/status")
 async def scheduler_status():
-    return scheduler.status
+    from src.scraper.browser import browser_manager
+    status = scheduler.status
+    status["browser_available"] = browser_manager.is_available
+    return status
 
 
 @router.post("/scheduler/pause")
@@ -265,6 +268,66 @@ async def run_discovery(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(discovery_engine.run_discovery)
     return {"status": "started"}
+
+
+@router.get("/status/live")
+async def live_status():
+    """Comprehensive live status for the GUI — current job, discovery, per-source status."""
+    from src.scraper.browser import browser_manager
+    from datetime import timedelta
+
+    current_job = scraper_engine.current_job
+    disc_state = source_manager.discovery_state
+
+    # Compute next discovery time
+    next_discovery = None
+    last_run = disc_state.get("last_discovery_run")
+    interval_hours = disc_state.get("interval_hours", 6)
+    if last_run:
+        try:
+            last_dt = datetime.fromisoformat(last_run)
+            next_dt = last_dt + timedelta(hours=interval_hours)
+            next_discovery = next_dt.isoformat()
+        except (ValueError, TypeError):
+            pass
+
+    # Compute per-source status and next scrape time
+    sources_status = []
+    now = datetime.now()
+    for s in source_manager.get_all_sources():
+        status = "idle"
+        if current_job and current_job.get("source_id") == s["id"]:
+            status = "scraping"
+        elif not s.get("enabled", True):
+            status = "disabled"
+        elif s.get("consecutive_failures", 0) >= 5:
+            status = "error"
+
+        next_scrape = None
+        if s.get("last_scraped") and s.get("enabled", True):
+            try:
+                last_dt = datetime.fromisoformat(s["last_scraped"])
+                next_dt = last_dt + timedelta(hours=s.get("schedule_hours", 12))
+                next_scrape = next_dt.isoformat()
+            except (ValueError, TypeError):
+                pass
+
+        sources_status.append({
+            "id": s["id"],
+            "name": s.get("name", ""),
+            "status": status,
+            "next_scrape": next_scrape,
+        })
+
+    return {
+        "current_job": current_job,
+        "discovery_running": discovery_engine.is_running,
+        "discovery_last_results": discovery_engine.last_results,
+        "next_discovery": next_discovery,
+        "browser_available": browser_manager.is_available,
+        "scheduler": scheduler.status,
+        "sources_status": sources_status,
+    }
 
 
 # === Baserow + Field Mapping ===

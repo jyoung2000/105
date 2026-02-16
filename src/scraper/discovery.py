@@ -1,5 +1,6 @@
 """Source discovery engine — finds new wallpaper sources via web search."""
 import asyncio
+import random
 from datetime import datetime
 from urllib.parse import urlparse
 from src.scraper.browser import browser_manager
@@ -43,8 +44,12 @@ class DiscoveryEngine:
 
         try:
             if not browser_manager.is_available:
-                logger.warning("Browser not available for discovery")
-                return []
+                logger.info("Browser not available, attempting initialization...")
+                success = await browser_manager.initialize()
+                if not success:
+                    logger.warning("Browser init failed, discovery cannot proceed")
+                    return []
+                logger.info("Browser initialized successfully for discovery")
 
             # Get next query from rotation
             query_data = source_manager.get_next_query()
@@ -99,14 +104,18 @@ class DiscoveryEngine:
                 except Exception as e:
                     logger.warning(f"Error validating {url}: {e}")
 
-                # Be polite between validations
-                await asyncio.sleep(3)
+                # Be polite between validations (randomized)
+                await asyncio.sleep(3 + random.random() * 3)
 
             # Record query usage
             source_manager.record_query_use(query_id, new_sources)
-            source_manager.update_discovery_state(
-                last_discovery_run=datetime.now().isoformat()
-            )
+            # Only stamp discovery as "run" if we actually evaluated URLs
+            if results:
+                source_manager.update_discovery_state(
+                    last_discovery_run=datetime.now().isoformat()
+                )
+            else:
+                logger.info("Discovery produced no results, will retry on next cycle")
 
             self._last_results = results[-10:]
             logger.info(f"Discovery complete: {new_sources} new sources from '{query_text}'")

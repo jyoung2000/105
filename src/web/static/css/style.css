@@ -290,6 +290,45 @@ td { font-size: 0.85rem; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Active scraping banner */
+.scraping-banner {
+    display: flex; justify-content: space-between; align-items: center;
+    background: linear-gradient(135deg, #1a3a4a, #16213e);
+    border: 1px solid var(--info); border-left: 4px solid var(--info);
+    border-radius: 8px; padding: 0.8rem 1.2rem; margin-bottom: 1rem;
+    animation: pulse-border 2s ease-in-out infinite;
+}
+@keyframes pulse-border {
+    0%, 100% { border-left-color: var(--info); }
+    50% { border-left-color: var(--accent); }
+}
+.scraping-banner-content { display: flex; align-items: center; gap: 0.8rem; }
+.scraping-banner-title { font-weight: 600; font-size: 0.95rem; }
+.scraping-banner-detail { font-size: 0.8rem; color: var(--text-secondary); }
+.scraping-banner-progress { display: flex; align-items: center; gap: 0.8rem; }
+.scraping-banner-stats { font-size: 0.8rem; color: var(--text-secondary); white-space: nowrap; }
+
+/* Discovery banner */
+.discovery-banner {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.6rem 1.2rem; margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+/* Source status badges */
+.badge-scraping { background: #1a3a4a; color: #3498db; animation: badge-pulse 1.5s ease-in-out infinite; }
+.badge-idle { background: #2c3e50; color: #85929e; }
+.badge-queued { background: #2c3e40; color: #1abc9c; }
+.badge-disabled { background: #2c2c2c; color: #666; }
+@keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Countdown text */
+.countdown { font-size: 0.75rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
 /* Responsive */
 @media (max-width: 900px) {
     .gallery-layout { grid-template-columns: 1fr; }
