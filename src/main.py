@@ -1,19 +1,36 @@
 """FastAPI application — wallpaper scraper with non-fatal startup."""
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from src.utils.logging import setup_logging
 
 logger = setup_logging("main")
+
+
+def _ensure_data_dirs():
+    """Try to create data directories. Non-fatal — log warning on failure."""
+    dirs = [
+        "/app/data/logs", "/app/data/config", "/app/data/temp",
+        "/app/data/wallpapers", "/app/data/thumbnails",
+    ]
+    for d in dirs:
+        try:
+            Path(d).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Could not create {d}: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown — ALL wrapped in try/except."""
     logger.info("Wallpaper Scraper starting up...")
+
+    # Ensure data directories exist (best-effort)
+    _ensure_data_dirs()
 
     # Load config
     try:
@@ -98,14 +115,18 @@ app = FastAPI(title="Wallpaper Scraper", lifespan=lifespan)
 from src.api.routes import router
 app.include_router(router)
 
-# Serve thumbnails as static files
-thumbnail_dir = Path("/app/data/thumbnails")
-thumbnail_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/thumbnails", StaticFiles(directory=str(thumbnail_dir)), name="thumbnails")
-
-# Serve web GUI static files
+# Serve web GUI static files (these are inside /app/src — container-owned, always accessible)
 static_dir = Path(__file__).parent / "web" / "static"
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/thumbnails/{filename:path}")
+async def serve_thumbnail(filename: str):
+    """Fallback thumbnail serving — works even if StaticFiles mount failed."""
+    thumb_path = Path("/app/data/thumbnails") / filename
+    if thumb_path.is_file():
+        return FileResponse(str(thumb_path), media_type="image/jpeg")
+    return Response(status_code=404)
 
 
 @app.get("/")
