@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+playwright
+httpx[http2]
+beautifulsoup4
+lxml
+Pillow
+imagehash
+pydantic
+pydantic-settings
+pyyaml
+rich
+tenacity
+aiofiles
+python-dotenv
+transformers
+accelerate

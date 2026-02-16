@@ -1,0 +1,16 @@
+services:
+  wallpaper-scraper:
+    build: .
+    container_name: wallpaper-scraper
+    ports:
+      - "1629:1629"
+    environment:
+      - PUID=99
+      - PGID=100
+      - TZ=America/Chicago
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    mem_limit: 6g
+    memswap_limit: 6g
+    cpus: "6.0"

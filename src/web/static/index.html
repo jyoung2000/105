@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wallpaper Scraper</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-brand">Wallpaper Scraper</div>
+        <div class="nav-tabs">
+            <div class="nav-tab active" data-tab="gallery">Gallery</div>
+            <div class="nav-tab" data-tab="scrape">Scrape</div>
+            <div class="nav-tab" data-tab="sources">Sources</div>
+            <div class="nav-tab" data-tab="jobs">Jobs</div>
+            <div class="nav-tab" data-tab="settings">Settings</div>
+            <div class="nav-tab" data-tab="baserow">Baserow</div>
+            <div class="nav-tab" data-tab="stats">Stats</div>
+        </div>
+    </nav>
+
+    <div class="main">
+        <!-- Tab 1: Gallery -->
+        <div id="tab-gallery" class="tab-content active">
+            <div class="stat-grid" id="gallery-stats"></div>
+            <div class="gallery-controls">
+                <input type="text" id="gallery-search" placeholder="Search title/tags..." style="max-width:250px">
+                <select id="gallery-source-filter" style="max-width:200px"><option value="">All Sources</option></select>
+                <select id="gallery-status-filter" style="max-width:150px">
+                    <option value="">All Status</option>
+                    <option value="uploaded">Uploaded</option>
+                    <option value="duplicate">Duplicate</option>
+                    <option value="error">Error</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="loadGallery()">Refresh</button>
+            </div>
+            <div class="gallery-layout">
+                <div class="card">
+                    <div class="card-title">Recent Activity</div>
+                    <div class="activity-feed" id="activity-feed"></div>
+                </div>
+                <div>
+                    <div class="gallery-grid" id="gallery-grid"></div>
+                    <div style="text-align:center;margin-top:1rem">
+                        <button class="btn btn-secondary" id="load-more-btn" onclick="loadMoreGallery()" style="display:none">Load More</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 2: Scrape -->
+        <div id="tab-scrape" class="tab-content">
+            <div class="card">
+                <div class="card-title">Manual Scrape</div>
+                <div id="baserow-warning" style="display:none;background:#4a3a1a;border:1px solid #f39c12;padding:0.8rem;border-radius:6px;margin-bottom:1rem;color:#f39c12;font-size:0.85rem">
+                    Baserow not configured. Wallpapers will be scraped but not uploaded. Configure Baserow in the Baserow tab.
+                </div>
+                <div class="form-group">
+                    <label>URL to scrape</label>
+                    <textarea id="scrape-url" rows="2" placeholder="https://wallhaven.cc/search?sorting=views"></textarea>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                    <div class="form-group">
+                        <label>Source Name (optional)</label>
+                        <input type="text" id="scrape-name" placeholder="My Source">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Pages</label>
+                        <input type="number" id="scrape-pages" value="5" min="1" max="50">
+                    </div>
+                </div>
+                <button class="btn btn-primary" id="scrape-btn" onclick="startScrape()">Start Scrape</button>
+            </div>
+            <div class="card">
+                <div class="card-title">Recent Jobs</div>
+                <div id="scrape-jobs"></div>
+            </div>
+        </div>
+
+        <!-- Tab 3: Sources -->
+        <div id="tab-sources" class="tab-content">
+            <div class="scheduler-banner" id="scheduler-banner">
+                <div>
+                    <span class="status-dot" id="scheduler-dot"></span>
+                    <span id="scheduler-text">Scheduler: Loading...</span>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-secondary" id="scheduler-toggle-btn" onclick="toggleScheduler()">Pause</button>
+                </div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                <h3>Wallpaper Sources</h3>
+                <button class="btn btn-primary btn-sm" onclick="showAddSourceModal()">Add Source</button>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Enabled</th><th>Name</th><th>Category</th><th>Schedule</th>
+                        <th>Last Scraped</th><th>Last Run</th><th>Total</th><th>Health</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="sources-table"></tbody>
+            </table>
+
+            <div class="collapsible-header" onclick="toggleCollapsible('discovery-section')">
+                <span style="font-weight:600">Discovery Queries</span>
+                <span id="discovery-section-arrow">&#9660;</span>
+            </div>
+            <div class="collapsible-content" id="discovery-section">
+                <div style="display:flex;gap:0.5rem;margin:0.8rem 0;align-items:center">
+                    <input type="text" id="new-query-input" placeholder="Add search query..." style="max-width:300px">
+                    <button class="btn btn-primary btn-sm" onclick="addQuery()">Add Query</button>
+                    <button class="btn btn-secondary btn-sm" onclick="runDiscovery()">Discover Now</button>
+                </div>
+                <table>
+                    <thead>
+                        <tr><th>Enabled</th><th>Query</th><th>Type</th><th>Used</th><th>Found</th><th>Last Used</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody id="queries-table"></tbody>
+                </table>
+                <div class="card" style="margin-top:1rem">
+                    <div class="card-title">Discovery Log</div>
+                    <div id="discovery-log" style="font-size:0.85rem;color:var(--text-secondary)">No recent discovery results.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 4: Jobs -->
+        <div id="tab-jobs" class="tab-content">
+            <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+                <select id="jobs-status-filter" style="max-width:150px" onchange="loadJobs()">
+                    <option value="">All Status</option>
+                    <option value="running">Running</option>
+                    <option value="completed">Completed</option>
+                </select>
+            </div>
+            <div id="jobs-list"></div>
+        </div>
+
+        <!-- Tab 5: Settings -->
+        <div id="tab-settings" class="tab-content">
+            <div class="card">
+                <div class="card-title">Resolution Filters</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                    <div class="form-group"><label>Min Width</label><input type="number" id="set-min-width" value="800"></div>
+                    <div class="form-group"><label>Min Height</label><input type="number" id="set-min-height" value="600"></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title">Scraping</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
+                    <div class="form-group"><label>Max Pages</label><input type="number" id="set-max-pages" value="10"></div>
+                    <div class="form-group"><label>Page Delay (s)</label><input type="number" id="set-page-delay" value="2"></div>
+                    <div class="form-group"><label>Max Downloads</label><input type="number" id="set-max-dl" value="3"></div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title">JPEG Compression</div>
+                <div class="form-group"><label>Quality (1-100)</label><input type="number" id="set-jpeg-quality" value="85" min="1" max="100"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Scheduler</div>
+                <div class="form-group"><label>Check Interval (minutes)</label><input type="number" id="set-check-interval" value="5"></div>
+            </div>
+            <div class="card">
+                <div class="card-title">Gallery</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                    <div class="form-group"><label>Max Entries</label><input type="number" id="set-max-entries" value="5000"></div>
+                    <div class="form-group"><label>Max Thumbnails</label><input type="number" id="set-max-thumbs" value="5000"></div>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+
+        <!-- Tab 6: Baserow -->
+        <div id="tab-baserow" class="tab-content">
+            <div class="card">
+                <div class="card-title">Connection</div>
+                <div class="form-group"><label>API URL</label><input type="text" id="br-url" placeholder="https://baserow.jymedia.cc"></div>
+                <div class="form-group">
+                    <label>API Token</label>
+                    <div style="display:flex;gap:0.5rem">
+                        <input type="password" id="br-token" placeholder="Your API token">
+                        <button class="btn btn-sm btn-secondary" onclick="toggleTokenVisibility()">Show</button>
+                    </div>
+                </div>
+                <div class="form-group"><label>Table ID</label><input type="number" id="br-table-id" placeholder="810"></div>
+                <div style="display:flex;gap:0.5rem">
+                    <button class="btn btn-primary" onclick="testBaserow()">Test Connection</button>
+                    <button class="btn btn-success" onclick="saveBaserow()">Save</button>
+                </div>
+                <div id="br-test-result" style="margin-top:0.8rem"></div>
+            </div>
+            <div class="card" id="field-mapping-section" style="display:none">
+                <div class="card-title">Field Mapping</div>
+                <div class="mapping-bar" id="mapping-bar"></div>
+                <table class="mapping-table">
+                    <thead><tr><th>Scraper Field</th><th></th><th>Baserow Column</th><th>Status</th></tr></thead>
+                    <tbody id="mapping-table"></tbody>
+                </table>
+                <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                    <button class="btn btn-primary btn-sm" onclick="refreshFields()">Refresh Fields</button>
+                    <button class="btn btn-secondary btn-sm" onclick="autoMatchFields()">Auto-Match</button>
+                    <button class="btn btn-secondary btn-sm" onclick="resetMapping()">Reset Defaults</button>
+                    <button class="btn btn-success btn-sm" onclick="saveMapping()">Save Mapping</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab 7: Stats -->
+        <div id="tab-stats" class="tab-content">
+            <div class="stat-grid" id="stats-summary"></div>
+            <div class="card">
+                <div class="card-title">Per-Source Statistics</div>
+                <table>
+                    <thead><tr><th>Source</th><th>Category</th><th>Uploaded</th><th>Dupes</th><th>Errors</th><th>Last Scraped</th></tr></thead>
+                    <tbody id="stats-sources"></tbody>
+                </table>
+            </div>
+            <div class="card">
+                <div class="card-title">Discovery Statistics</div>
+                <div id="stats-discovery"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modal-overlay">
+        <div class="modal" id="modal-content"></div>
+    </div>
+
+    <!-- Toast container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

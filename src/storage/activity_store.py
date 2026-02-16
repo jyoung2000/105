@@ -1,0 +1,173 @@
+"""Activity store — tracks all scraped wallpapers with thumbnails."""
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+from pydantic import BaseModel
+from src.utils.logging import setup_logging
+
+logger = setup_logging("activity")
+
+ACTIVITY_PATH = Path("/app/data/config/activity.json")
+THUMBNAIL_DIR = Path("/app/data/thumbnails")
+MAX_ENTRIES = 5000
+MAX_THUMBNAILS = 5000
+
+
+class ActivityEntry(BaseModel):
+    id: str
+    timestamp: str
+    source_id: str
+    source_name: str
+    job_id: str
+    thumbnail_path: str
+    title: str
+    alt_text: str
+    tags: str
+    width: int
+    height: int
+    aspect_ratio: str
+    is_mobile: bool
+    img_url: str
+    img_hash: str
+    baserow_row_id: Optional[int] = None
+    file_size_kb: int = 0
+    status: str = "uploaded"
+    error_message: str = ""
+
+
+class ActivityStore:
+    """Manages activity log and thumbnails."""
+
+    def __init__(self):
+        self._entries: list[dict] = []
+        self._loaded = False
+
+    def load(self):
+        """Load activity from disk."""
+        try:
+            if ACTIVITY_PATH.exists():
+                with open(ACTIVITY_PATH, "r") as f:
+                    data = json.load(f)
+                self._entries = data if isinstance(data, list) else data.get("entries", [])
+            else:
+                self._entries = []
+            self._loaded = True
+        except Exception as e:
+            logger.warning(f"Failed to load activity: {e}")
+            self._entries = []
+            self._loaded = True
+
+    def save(self):
+        """Save activity to disk."""
+        try:
+            ACTIVITY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(ACTIVITY_PATH, "w") as f:
+                json.dump(self._entries, f, indent=1, default=str)
+        except Exception as e:
+            logger.error(f"Failed to save activity: {e}")
+
+    def add_entry(self, entry: ActivityEntry):
+        """Add an activity entry."""
+        if not self._loaded:
+            self.load()
+        self._entries.insert(0, entry.model_dump())
+        # Prune if over max
+        if len(self._entries) > MAX_ENTRIES:
+            self._entries = self._entries[:MAX_ENTRIES]
+        self.save()
+
+    def get_recent(self, limit: int = 50, offset: int = 0) -> list[dict]:
+        """Get recent activity entries."""
+        if not self._loaded:
+            self.load()
+        return self._entries[offset:offset + limit]
+
+    def get_by_source(self, source_id: str, limit: int = 50) -> list[dict]:
+        """Get activity entries for a specific source."""
+        if not self._loaded:
+            self.load()
+        return [e for e in self._entries if e.get("source_id") == source_id][:limit]
+
+    def get_by_status(self, status: str, limit: int = 50) -> list[dict]:
+        """Get activity entries by status."""
+        if not self._loaded:
+            self.load()
+        return [e for e in self._entries if e.get("status") == status][:limit]
+
+    def search(self, query: str, limit: int = 50) -> list[dict]:
+        """Search activity entries by title or tags."""
+        if not self._loaded:
+            self.load()
+        query_lower = query.lower()
+        results = []
+        for entry in self._entries:
+            if (
+                query_lower in entry.get("title", "").lower()
+                or query_lower in entry.get("tags", "").lower()
+                or query_lower in entry.get("source_name", "").lower()
+            ):
+                results.append(entry)
+                if len(results) >= limit:
+                    break
+        return results
+
+    def get_summary(self) -> dict:
+        """Get summary statistics."""
+        if not self._loaded:
+            self.load()
+        today = datetime.now().strftime("%Y-%m-%d")
+        total = len(self._entries)
+        today_count = sum(1 for e in self._entries if e.get("timestamp", "").startswith(today))
+        uploaded = sum(1 for e in self._entries if e.get("status") == "uploaded")
+        duplicates = sum(1 for e in self._entries if e.get("status") == "duplicate")
+        errors = sum(1 for e in self._entries if e.get("status") == "error")
+
+        # Per-source counts
+        source_counts = {}
+        for e in self._entries:
+            sname = e.get("source_name", "Unknown")
+            source_counts[sname] = source_counts.get(sname, 0) + 1
+
+        return {
+            "total": total,
+            "today": today_count,
+            "uploaded": uploaded,
+            "duplicates": duplicates,
+            "errors": errors,
+            "by_source": source_counts,
+        }
+
+    def prune(self, max_entries: int = MAX_ENTRIES, max_thumbnails: int = MAX_THUMBNAILS):
+        """Prune old entries and orphaned thumbnails."""
+        if not self._loaded:
+            self.load()
+
+        # Prune entries
+        if len(self._entries) > max_entries:
+            self._entries = self._entries[:max_entries]
+            self.save()
+
+        # Prune thumbnails
+        try:
+            if not THUMBNAIL_DIR.exists():
+                return
+            referenced = {e.get("img_hash", "") for e in self._entries}
+            thumbs = sorted(THUMBNAIL_DIR.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if len(thumbs) > max_thumbnails:
+                for thumb in thumbs[max_thumbnails:]:
+                    hash_name = thumb.stem
+                    if hash_name not in referenced:
+                        thumb.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Thumbnail pruning error: {e}")
+
+    @property
+    def count(self) -> int:
+        if not self._loaded:
+            self.load()
+        return len(self._entries)
+
+
+# Singleton
+activity_store = ActivityStore()

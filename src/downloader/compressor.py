@@ -1,0 +1,91 @@
+"""JPEG compression and thumbnail generation."""
+import hashlib
+from pathlib import Path
+from typing import Optional, Tuple
+from PIL import Image
+from src.utils.logging import setup_logging
+
+logger = setup_logging("compressor")
+
+TEMP_DIR = Path("/app/data/temp")
+THUMBNAIL_DIR = Path("/app/data/thumbnails")
+
+
+class ImageCompressor:
+    """Compress images to JPEG and generate thumbnails."""
+
+    def __init__(self, quality: int = 85, thumbnail_size: int = 200, thumbnail_quality: int = 60):
+        self.quality = quality
+        self.thumbnail_size = thumbnail_size
+        self.thumbnail_quality = thumbnail_quality
+
+    def compress(self, input_path: Path, site_name: str = "unknown") -> Optional[Tuple[Path, str, int, int, int]]:
+        """Compress image to JPEG. Returns (output_path, img_hash, width, height, file_size_kb) or None."""
+        try:
+            img = Image.open(input_path)
+            width, height = img.size
+
+            # Convert to RGB if needed
+            if img.mode in ("RGBA", "P", "LA"):
+                background = Image.new("RGB", img.size, (0, 0, 0))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                if img.mode in ("RGBA", "LA"):
+                    background.paste(img, mask=img.split()[-1])
+                    img = background
+                else:
+                    img = img.convert("RGB")
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+
+            # Generate hash from image content
+            img_hash = self._hash_image(img)
+
+            # Save compressed JPEG
+            safe_site = "".join(c if c.isalnum() else "_" for c in site_name)[:20]
+            output_name = f"{safe_site}_{img_hash}_{width}x{height}.jpg"
+            output_path = TEMP_DIR / output_name
+
+            img.save(output_path, "JPEG", quality=self.quality, optimize=True, subsampling=0)
+            file_size_kb = output_path.stat().st_size // 1024
+
+            logger.debug(f"Compressed {input_path.name} -> {output_name} ({file_size_kb} KB)")
+            return output_path, img_hash, width, height, file_size_kb
+
+        except Exception as e:
+            logger.error(f"Compression failed for {input_path}: {e}")
+            return None
+
+    def generate_thumbnail(self, input_path: Path, img_hash: str) -> Optional[str]:
+        """Generate a 200x200 thumbnail. Returns relative path or None."""
+        try:
+            THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+            thumb_path = THUMBNAIL_DIR / f"{img_hash}.jpg"
+
+            if thumb_path.exists():
+                return f"thumbnails/{img_hash}.jpg"
+
+            img = Image.open(input_path)
+            img.thumbnail((self.thumbnail_size, self.thumbnail_size), Image.LANCZOS)
+
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+
+            img.save(thumb_path, "JPEG", quality=self.thumbnail_quality, optimize=True)
+            logger.debug(f"Generated thumbnail: {thumb_path}")
+            return f"thumbnails/{img_hash}.jpg"
+
+        except Exception as e:
+            logger.error(f"Thumbnail generation failed: {e}")
+            return None
+
+    def _hash_image(self, img: Image.Image) -> str:
+        """Generate a perceptual hash of the image content."""
+        try:
+            small = img.copy()
+            small = small.resize((64, 64), Image.LANCZOS)
+            data = small.tobytes()
+            return hashlib.sha256(data).hexdigest()[:16]
+        except Exception:
+            import uuid
+            return uuid.uuid4().hex[:16]
