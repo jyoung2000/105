@@ -14,10 +14,10 @@ MIN_HEIGHT = 600
 
 # URL patterns that suggest high-resolution images
 HIGHRES_PATTERNS = [
-    r"original", r"full", r"download", r"highres", r"large",
+    r"original", r"/full/", r"download", r"highres", r"large",
     r"(\d{3,4})x(\d{3,4})", r"4k", r"uhd", r"2160", r"1440", r"1080",
-    r"wallpaper", r"wall", r"wp-content/uploads",
-    r"raw", r"source", r"max",
+    r"wallpaper", r"wp-content/uploads",
+    r"raw", r"source", r"/max/",
 ]
 
 # Patterns to exclude (thumbnails, icons, UI elements)
@@ -28,6 +28,7 @@ EXCLUDE_PATTERNS = [
     r"google", r"analytics", r"tracking", r"pixel",
     r"btn", r"button", r"arrow", r"close", r"menu",
     r"1x1", r"spacer", r"blank", r"transparent",
+    r"/thumb[s]?/", r"/small/", r"/preview/", r"/mini/",
 ]
 
 # Image extensions
@@ -151,6 +152,65 @@ class GenericAdapter(BaseAdapter):
         images.sort(key=lambda x: x.width * x.height if x.width and x.height else 0, reverse=True)
         logger.info(f"Found {len(images)} potential wallpapers on {page_url}")
         return images
+
+    def get_detail_page_links(self, html: str, page_url: str) -> list[dict]:
+        """Find links to detail/individual wallpaper pages (not image files).
+
+        On gallery/listing pages, thumbnails are wrapped in <a> tags linking
+        to individual pages where full-size images live.
+        Returns list of {url, thumbnail_url, alt, title} dicts.
+        """
+        soup = BeautifulSoup(html, "lxml")
+        links = []
+        seen = set()
+
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            abs_url = urljoin(page_url, href)
+
+            # Skip if it's an image file URL (we want page links, not images)
+            if self._is_image_url(abs_url):
+                continue
+            # Skip external/social links
+            link_domain = urlparse(abs_url).netloc
+            page_domain = urlparse(page_url).netloc
+            if link_domain and page_domain and link_domain != page_domain:
+                continue
+            if abs_url in seen:
+                continue
+
+            # Must contain a thumbnail image
+            img = link.find("img")
+            if not img:
+                continue
+
+            thumb_src = img.get("src", "") or img.get("data-src", "") or ""
+            if not thumb_src:
+                continue
+
+            # The link should look like a detail/wallpaper page
+            path = urlparse(abs_url).path.lower()
+            is_detail = bool(re.search(
+                r"/(w|wallpaper|photo|image|view|detail|pic|img|download|full)/",
+                path
+            ))
+            # Also accept single-segment paths like /w/abc123 or numeric IDs
+            if not is_detail:
+                is_detail = bool(re.search(r"/\w{1,3}/[a-z0-9]+$", path))
+
+            if not is_detail:
+                continue
+
+            seen.add(abs_url)
+            links.append({
+                "url": abs_url,
+                "thumbnail_url": urljoin(page_url, thumb_src),
+                "alt": img.get("alt", "") or "",
+                "title": img.get("title", "") or link.get("title", "") or "",
+            })
+
+        logger.info(f"Found {len(links)} detail page links on {page_url}")
+        return links
 
     async def get_next_page_url(self, html: str, current_url: str, page_num: int) -> Optional[str]:
         """Find pagination link for next page."""

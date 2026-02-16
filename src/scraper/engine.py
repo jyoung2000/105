@@ -196,8 +196,20 @@ class ScraperEngine:
                 break
 
             images = await adapter.scrape(html, current_url)
+            logger.info(f"Found {len(images)} direct images on page {page_num}")
+
+            # If no direct high-res images, try following detail page links
+            if not images:
+                detail_links = adapter.get_detail_page_links(html, current_url)
+                if detail_links:
+                    logger.info(f"No direct images found, following {len(detail_links)} detail page links")
+                    detail_images = await self._scrape_detail_pages(
+                        detail_links, adapter, job, scroll_count, scroll_wait
+                    )
+                    images = detail_images
+                    logger.info(f"Found {len(images)} images from detail pages")
+
             job.images_found += len(images)
-            logger.info(f"Found {len(images)} images on page {page_num}")
 
             # Process images
             for i, img in enumerate(images):
@@ -209,6 +221,8 @@ class ScraperEngine:
                         job.duplicates += 1
                     elif result.status == "error":
                         job.errors += 1
+                        if result.error:
+                            logger.debug(f"Image skip: {result.error} - {img.url[:80]}")
                 except Exception as e:
                     logger.error(f"Image processing error: {e}")
                     job.errors += 1
@@ -232,6 +246,42 @@ class ScraperEngine:
             # Randomized delay between pages (2-4s)
             await asyncio.sleep(2 + random.random() * 2)
 
+    async def _scrape_detail_pages(self, detail_links: list[dict], adapter, job: ScrapeJob,
+                                    scroll_count: int, scroll_wait: int) -> list:
+        """Visit individual detail/wallpaper pages to find full-size images."""
+        all_images = []
+        max_details = config_store.get("scraping", "max_pages", default=10)
+        # Limit detail pages per listing page to avoid runaway scraping
+        links_to_visit = detail_links[:min(len(detail_links), max_details * 3)]
+
+        for i, link_info in enumerate(links_to_visit):
+            detail_url = link_info["url"]
+            try:
+                logger.info(f"Visiting detail page {i+1}/{len(links_to_visit)}: {detail_url}")
+                html = await browser_manager.get_page_content(
+                    detail_url, scroll_count=min(scroll_count, 3), scroll_wait_ms=scroll_wait
+                )
+                images = await adapter.scrape(html, detail_url)
+                if images:
+                    # Carry forward metadata from the thumbnail link
+                    for img in images:
+                        if not img.alt and link_info.get("alt"):
+                            img.alt = link_info["alt"]
+                        if not img.title and link_info.get("title"):
+                            img.title = link_info["title"]
+                    all_images.extend(images)
+                    logger.info(f"Found {len(images)} images on detail page {detail_url}")
+                else:
+                    logger.debug(f"No images found on detail page {detail_url}")
+            except Exception as e:
+                logger.warning(f"Failed to scrape detail page {detail_url}: {e}")
+                job.error_log.append(f"Detail page error: {e}")
+
+            # Randomized delay between detail pages (1-3s)
+            await asyncio.sleep(1 + random.random() * 2)
+
+        return all_images
+
     async def _process_image(self, img, job: ScrapeJob, validator: ImageValidator = None) -> ScrapeResult:
         """Process a single image through the full pipeline."""
         result = ScrapeResult()
@@ -241,9 +291,11 @@ class ScraperEngine:
 
         try:
             # Download (with referer for hotlink protection)
+            logger.info(f"Downloading: {img.url[:100]}")
             dl_path = await self.downloader.download(img.url, referer=img.page_url)
             if dl_path is None:
                 result.error = "Download failed"
+                logger.warning(f"Download failed: {img.url[:100]}")
                 return result
             temp_files.append(dl_path)
             job.images_downloaded += 1
@@ -252,6 +304,7 @@ class ScraperEngine:
             is_valid, reason = validator.validate(dl_path)
             if not is_valid:
                 result.error = f"Validation failed: {reason}"
+                logger.info(f"Validation failed ({reason}): {img.url[:80]}")
                 return result
 
             # Compress
@@ -324,6 +377,7 @@ class ScraperEngine:
 
             result.success = True
             result.status = "uploaded"
+            logger.info(f"Processed {width}x{height} wallpaper: {title or img.url[:60]}")
 
             # Log activity
             self._log_activity(job, img, img_hash, width, height, file_size_kb,
