@@ -8,25 +8,40 @@ echo "Starting with UID=$PUID, GID=$PGID"
 groupmod -o -g "$PGID" scraper 2>/dev/null || true
 usermod -o -u "$PUID" -g "$PGID" scraper 2>/dev/null || true
 
-# Create data directories (volume mount may already exist)
-# mkdir -p will succeed if dirs already exist even without write perms on parent
-mkdir -p /app/data/logs /app/data/config /app/data/temp /app/data/wallpapers /app/data/thumbnails 2>/dev/null || true
+# Fix /app/data mount point first
+chown "$PUID:$PGID" /app/data 2>/dev/null || chmod 777 /app/data 2>/dev/null || true
 
-# Try to fix permissions — multiple strategies for Unraid compatibility
-# Strategy 1: chown the whole tree
-if chown -R "$PUID:$PGID" /app/data 2>/dev/null; then
-    echo "Permissions set via chown"
-# Strategy 2: chmod to world-writable
-elif chmod -R 777 /app/data 2>/dev/null; then
-    echo "Permissions set via chmod 777"
-# Strategy 3: try each subdirectory individually
+# Create and fix each subdirectory individually
+# On Unraid, recursive chmod on a mount point may not actually recurse,
+# so we must handle each directory explicitly
+for dir in logs config temp wallpapers thumbnails; do
+    target="/app/data/$dir"
+    mkdir -p "$target" 2>/dev/null || true
+    # Try chown first, then chmod, for each directory individually
+    chown -R "$PUID:$PGID" "$target" 2>/dev/null || \
+    chmod -R 777 "$target" 2>/dev/null || true
+done
+
+# Verify the scraper user can actually write — if not, print clear diagnostics
+if gosu scraper touch /app/data/config/.write_test 2>/dev/null; then
+    rm -f /app/data/config/.write_test
+    echo "Permissions OK — scraper user can write to /app/data"
 else
-    echo "WARN: Bulk permission fix failed — trying individual directories"
+    echo "WARN: scraper user cannot write to /app/data — trying final chmod on each dir"
+    # Last resort: chmod each dir as root, one at a time
     for dir in logs config temp wallpapers thumbnails; do
-        chown -R "$PUID:$PGID" "/app/data/$dir" 2>/dev/null || \
-        chmod -R 777 "/app/data/$dir" 2>/dev/null || \
-        echo "WARN: Could not fix permissions on /app/data/$dir — continuing anyway"
+        chmod 777 "/app/data/$dir" 2>/dev/null || true
+        # Also chmod the mount point entries themselves
+        chmod a+rwx "/app/data/$dir" 2>/dev/null || true
     done
+    chmod 777 /app/data 2>/dev/null || true
+    # Verify again
+    if gosu scraper touch /app/data/config/.write_test 2>/dev/null; then
+        rm -f /app/data/config/.write_test
+        echo "Permissions fixed after retry"
+    else
+        echo "WARN: Permission fix failed — app will use fallback paths"
+    fi
 fi
 
 chown -R "$PUID:$PGID" /app/src 2>/dev/null || true

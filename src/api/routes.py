@@ -18,12 +18,13 @@ from src.storage.config_store import config_store
 from src.storage.activity_store import activity_store
 from src.storage.baserow import BaserowClient
 from src.metadata.schemas import DEFAULT_FIELD_MAPPING
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("api")
 router = APIRouter(prefix="/api")
 
-STATS_PATH = Path("/app/data/config/stats.json")
+STATS_PATH = data_path("config", "stats.json")
 
 
 # === Health ===

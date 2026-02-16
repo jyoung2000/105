@@ -6,22 +6,20 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
+from src.utils.paths import data_path, get_data_dir
 from src.utils.logging import setup_logging
 
 logger = setup_logging("main")
 
 
 def _ensure_data_dirs():
-    """Try to create data directories. Non-fatal — log warning on failure."""
-    dirs = [
-        "/app/data/logs", "/app/data/config", "/app/data/temp",
-        "/app/data/wallpapers", "/app/data/thumbnails",
-    ]
-    for d in dirs:
+    """Try to create data directories using the resolved base. Non-fatal."""
+    for sub in ["logs", "config", "temp", "wallpapers", "thumbnails"]:
         try:
-            Path(d).mkdir(parents=True, exist_ok=True)
+            data_path(sub).mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            logger.warning(f"Could not create {d}: {e}")
+            logger.warning(f"Could not create {sub}: {e}")
+    logger.info(f"Data directory resolved to: {get_data_dir()}")
 
 
 @asynccontextmanager
@@ -123,7 +121,7 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 @app.get("/thumbnails/{filename:path}")
 async def serve_thumbnail(filename: str):
     """Fallback thumbnail serving — works even if StaticFiles mount failed."""
-    thumb_path = Path("/app/data/thumbnails") / filename
+    thumb_path = data_path("thumbnails") / filename
     if thumb_path.is_file():
         return FileResponse(str(thumb_path), media_type="image/jpeg")
     return Response(status_code=404)

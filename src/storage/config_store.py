@@ -1,13 +1,14 @@
-"""Configuration store — persists settings to /app/data/config/config.json."""
+"""Configuration store — persists settings to config/config.json."""
 import json
 from pathlib import Path
 from typing import Any, Optional
 from src.metadata.schemas import DEFAULT_FIELD_MAPPING
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("config")
 
-CONFIG_PATH = Path("/app/data/config/config.json")
+CONFIG_PATH = data_path("config", "config.json")
 
 DEFAULT_CONFIG = {
     "baserow": {

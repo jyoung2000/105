@@ -17,11 +17,12 @@ from src.storage.config_store import config_store
 from src.storage.activity_store import ActivityStore, ActivityEntry, activity_store
 from src.metadata.schemas import WallpaperMetadata
 from src.utils.aspect_ratio import calculate_aspect_ratio, is_mobile
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("engine")
 
-TEMP_DIR = Path("/app/data/temp")
+TEMP_DIR = data_path("temp")
 
 
 class ScrapeResult:

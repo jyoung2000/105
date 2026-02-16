@@ -5,11 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("source_manager")
 
-SOURCES_PATH = Path("/app/data/config/sources.json")
+SOURCES_PATH = data_path("config", "sources.json")
 
 SEED_SOURCES = [
     {"url": "https://wallhaven.cc/search?sorting=views&order=desc", "name": "Wallhaven - Top Views", "schedule_hours": 6},

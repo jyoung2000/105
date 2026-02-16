@@ -4,11 +4,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("jobs")
 
-JOBS_PATH = Path("/app/data/config/jobs.json")
+JOBS_PATH = data_path("config", "jobs.json")
 
 
 class JobQueue:

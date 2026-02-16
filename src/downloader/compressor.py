@@ -3,12 +3,13 @@ import hashlib
 from pathlib import Path
 from typing import Optional, Tuple
 from PIL import Image
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("compressor")
 
-TEMP_DIR = Path("/app/data/temp")
-THUMBNAIL_DIR = Path("/app/data/thumbnails")
+TEMP_DIR = data_path("temp")
+THUMBNAIL_DIR = data_path("thumbnails")
 
 
 class ImageCompressor:

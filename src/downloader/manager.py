@@ -4,12 +4,13 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 import httpx
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 from src.utils.rate_limiter import RateLimiter
 
 logger = setup_logging("downloader")
 
-TEMP_DIR = Path("/app/data/temp")
+TEMP_DIR = data_path("temp")
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 

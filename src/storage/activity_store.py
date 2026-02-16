@@ -4,12 +4,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel
+from src.utils.paths import data_path
 from src.utils.logging import setup_logging
 
 logger = setup_logging("activity")
 
-ACTIVITY_PATH = Path("/app/data/config/activity.json")
-THUMBNAIL_DIR = Path("/app/data/thumbnails")
+ACTIVITY_PATH = data_path("config", "activity.json")
+THUMBNAIL_DIR = data_path("thumbnails")
 MAX_ENTRIES = 5000
 MAX_THUMBNAILS = 5000
 
