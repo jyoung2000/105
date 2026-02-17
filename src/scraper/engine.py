@@ -1,4 +1,5 @@
 """Scraper engine — full pipeline from URL to Baserow."""
+import re
 import uuid
 import asyncio
 import random
@@ -407,13 +408,14 @@ class ScraperEngine:
             # AI captioning
             title, alt_text, tags = await self.captioner.caption(compressed_path)
 
-            # Use scraped metadata if available
+            # Use scraped metadata as fallback, but clean it first
+            # (HTML alt/title often contain site names, dimensions, junk)
             if img.title and not title:
-                title = img.title
+                title = self._clean_scraped_text(img.title)
             if img.alt and not alt_text:
-                alt_text = img.alt
+                alt_text = self._clean_scraped_text(img.alt)
             if img.tags and not tags:
-                tags = img.tags
+                tags = self._clean_scraped_tags(img.tags)
 
             # Build metadata
             aspect = calculate_aspect_ratio(width, height)
@@ -476,6 +478,64 @@ class ScraperEngine:
                         tf.unlink()
                 except Exception:
                     pass
+
+    # Regex for stripping site names and junk from scraped HTML metadata
+    _SITE_NAME_RE = re.compile(
+        r"\b(wallpaper[s]?|background[s]?|desktop|hd|4k|uhd|1080p|2k|"
+        r"free download|download|stock photo|royalty.?free|"
+        r"wallhaven|unsplash|pexels|pixabay|wallpaperscraft|wallpaperflare|"
+        r"wallpaperaccess|wallpaperbat|wallpapercave|wallpaperbetter|"
+        r"hdwallpapers|getwallpapers|peakpx|setaswall|pixel4k|"
+        r"4kwallpapers|uhdpaper|goodfon|fonwall|rawpixel|freepik)\b",
+        re.I,
+    )
+    _JUNK_RE = re.compile(
+        r"^\d+x\d+$|^[\w-]{20,}$|^\d+$|^IMG_|^DSC_|^DSCN|"
+        r"^photo-\d|\.jpe?g$|\.png$|\.webp$",
+        re.I,
+    )
+    _DIMENSION_RE = re.compile(r"\b\d{3,5}\s*[x×]\s*\d{3,5}\b")
+    _PREFIX_RE = re.compile(
+        r"^(a\s+)?(photo|image|picture|wallpaper|background)\s+(of|from)\s+",
+        re.I,
+    )
+
+    def _clean_scraped_text(self, text: str) -> str:
+        """Clean scraped title/alt text — remove site names, dimensions, junk."""
+        if not text:
+            return ""
+        # Skip pure junk
+        if self._JUNK_RE.search(text.strip()):
+            return ""
+        # Remove dimensions like "1920x1080"
+        text = self._DIMENSION_RE.sub("", text)
+        # Remove site names
+        text = self._SITE_NAME_RE.sub("", text)
+        # Remove generic prefixes
+        text = self._PREFIX_RE.sub("", text)
+        # Remove separators commonly used in page titles: " | SiteName", " - SiteName"
+        text = re.sub(r"\s*[|–—-]\s*$", "", text)
+        text = re.sub(r"\s*[|–—-]\s*\S+\.(com|net|org|io|cc)\b.*$", "", text, flags=re.I)
+        # Clean whitespace
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"^[,.\-–—:;|]+\s*", "", text).strip()
+        text = re.sub(r"[,.\-–—:;|]+\s*$", "", text).strip()
+        if not text or len(text) < 3:
+            return ""
+        # Capitalize first letter
+        return text[0].upper() + text[1:]
+
+    def _clean_scraped_tags(self, tags: str) -> str:
+        """Clean scraped tags — remove site names and junk tags."""
+        if not tags:
+            return ""
+        cleaned = []
+        for tag in tags.split(","):
+            tag = tag.strip().lower()
+            tag = self._SITE_NAME_RE.sub("", tag).strip()
+            if tag and len(tag) > 1 and not self._JUNK_RE.search(tag):
+                cleaned.append(tag)
+        return ", ".join(cleaned[:20])
 
     def _log_activity(self, job, img, img_hash, width, height, file_size_kb,
                       thumb_path, row_id, status, title="", alt_text="", tags="",
