@@ -40,7 +40,7 @@ class ImageValidator:
             img = Image.open(file_path)
             width, height = img.size
 
-            if width < self.min_width and height < self.min_height:
+            if width < self.min_width or height < self.min_height:
                 return False, f"Too small ({width}x{height})"
 
             # Mobile/portrait check

@@ -34,6 +34,10 @@ EXCLUDE_PATTERNS = [
     r"[_-]t\.", r"[_-]sq\.", r"[_-]sm\.", r"[_-]xs\.",
     r"\.th\.", r"/tiny/", r"/micro/",
     r"/compressed/", r"/optimized/", r"/resized/",
+    # Stock photo watermarked thumbnails (embedded on many sites as ads/cross-promos)
+    r"istockphoto\.com", r"gettyimages\.", r"shutterstock\.com",
+    r"stock\.adobe\.com", r"depositphotos\.com", r"dreamstime\.com",
+    r"123rf\.com", r"alamy\.com",
 ]
 
 # URL patterns for navigation/non-detail pages to skip in detail page detection
@@ -44,6 +48,10 @@ NAV_EXCLUDE_PATTERNS = [
     r"/cart", r"/checkout", r"/account", r"/settings", r"/profile",
     r"/feed", r"/trending", r"/popular", r"/latest", r"/top/?$",
     r"^/$", r"/index\.html?$",
+    r"^/@",                # User profile pages (/@username)
+    r"^/user/", r"^/u/",  # Other user page patterns
+    r"^/author/", r"^/photographer/", r"^/contributor/",
+    r"/collections?/?$",   # Collection listing pages
 ]
 
 # Image extensions

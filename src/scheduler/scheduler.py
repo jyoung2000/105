@@ -17,6 +17,7 @@ class Scheduler:
         self._running = False
         self._paused = False
         self._task: asyncio.Task = None
+        self._discovery_task: asyncio.Task = None
         self._last_check: str = ""
         self._next_discovery: str = ""
 
@@ -31,6 +32,12 @@ class Scheduler:
     async def stop(self):
         """Stop the scheduler."""
         self._running = False
+        if self._discovery_task:
+            self._discovery_task.cancel()
+            try:
+                await self._discovery_task
+            except asyncio.CancelledError:
+                pass
         if self._task:
             self._task.cancel()
             try:
@@ -48,16 +55,18 @@ class Scheduler:
         logger.info("Scheduler resumed")
 
     async def _run_loop(self):
-        """Main scheduler loop."""
+        """Main scheduler loop — handles scraping. Discovery runs concurrently."""
         # Initial delay to let everything start up
         await asyncio.sleep(10)
+
+        # Launch discovery as a concurrent background task
+        self._discovery_task = asyncio.create_task(self._discovery_loop())
 
         while self._running:
             try:
                 if not self._paused:
                     self._last_check = datetime.now().isoformat()
                     await self._check_and_scrape()
-                    await self._check_discovery()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -66,6 +75,23 @@ class Scheduler:
             # Check interval from config
             interval = config_store.get("scheduler", "check_interval_minutes", default=5)
             await asyncio.sleep(interval * 60)
+
+    async def _discovery_loop(self):
+        """Independent discovery loop running concurrently with scraping."""
+        # Initial delay — let scraping start first
+        await asyncio.sleep(30)
+
+        while self._running:
+            try:
+                if not self._paused:
+                    await self._check_discovery()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Discovery loop error: {e}")
+
+            # Poll every 5 minutes; _check_discovery checks its own interval
+            await asyncio.sleep(300)
 
     async def _check_and_scrape(self):
         """Check all enabled sources and scrape any that are due."""

@@ -149,13 +149,14 @@ class BrowserManager:
             await page.close()
 
     async def search_duckduckgo(self, query: str) -> list[str]:
-        """Search DuckDuckGo and return result URLs with human-like behavior."""
+        """Search DuckDuckGo HTML version and return result URLs."""
         page = await self.get_page()
         urls = []
         try:
-            # Navigate to DuckDuckGo homepage first (more human-like)
-            await page.goto("https://duckduckgo.com/", wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(jitter(1500))
+            # Use HTML-only version — server-rendered, stable selectors, no JS needed
+            await page.goto("https://html.duckduckgo.com/html/",
+                            wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(jitter(1000))
 
             # Type the query character by character with random delays
             search_input = await page.query_selector('input[name="q"]')
@@ -168,21 +169,19 @@ class BrowserManager:
                 await page.keyboard.press("Enter")
             else:
                 logger.warning("DDG search input not found, using direct URL")
-                search_url = f"https://duckduckgo.com/?q={query.replace(' ', '+')}"
+                search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
 
             await page.wait_for_timeout(jitter(3000))
 
-            # Try multiple selector strategies (DDG changes layouts frequently)
+            # HTML DDG has stable, well-known selectors
             links = []
             matched_selector = "none"
             selectors = [
-                ("a[data-testid='result-title-a']", "modern"),
-                ("article a[href]", "article"),
-                ("#links a.result__a", "classic"),
-                ("ol.react-results--main a[href]", "react"),
-                ("a[rel='noopener'][href^='http']", "noopener"),
-                ("h2 a[href^='http']", "h2-links"),
+                ("a.result__a", "html-classic"),
+                (".result__title a[href]", "html-title"),
+                (".result__url", "html-url"),
+                ("a.result__snippet", "html-snippet"),
             ]
             for selector, name in selectors:
                 links = await page.query_selector_all(selector)
@@ -190,20 +189,33 @@ class BrowserManager:
                     matched_selector = name
                     break
 
-            # Ultimate fallback: all external links on the page
+            # Fallback: any link with an external href
             if not links:
                 links = await page.query_selector_all("a[href^='http']")
                 matched_selector = "all-links-fallback"
 
             # Filter DDG internal links, social media, etc.
-            skip_domains = {"duckduckgo.com", "duck.co", "spreadprivacy.com",
+            skip_domains = {"duckduckgo.com", "html.duckduckgo.com", "duck.co",
+                            "spreadprivacy.com",
                             "google.com", "facebook.com", "twitter.com", "x.com",
-                            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com"}
+                            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
+                            "reddit.com", "wikipedia.org", "amazon.com"}
             for link in links[:30]:
                 href = await link.get_attribute("href")
                 if href and href.startswith("http"):
                     try:
-                        domain = urlparse(href).netloc.lower()
+                        parsed = urlparse(href)
+                        domain = parsed.netloc.lower()
+                        # DDG HTML version sometimes wraps URLs in redirect links
+                        if "duckduckgo.com" in domain:
+                            # Extract the actual URL from DDG redirect
+                            from urllib.parse import parse_qs
+                            params = parse_qs(parsed.query)
+                            if "uddg" in params:
+                                href = params["uddg"][0]
+                                domain = urlparse(href).netloc.lower()
+                            else:
+                                continue
                         if not any(skip in domain for skip in skip_domains):
                             if href not in urls:
                                 urls.append(href)
@@ -222,6 +234,8 @@ class BrowserManager:
                         logger.warning("DDG may be blocking: detected captcha/unusual traffic text")
                     elif len(page_text.strip()) < 200:
                         logger.warning(f"DDG returned very short page ({len(page_text)} chars), possible block")
+                    else:
+                        logger.debug(f"DDG page text length: {len(page_text)} chars")
                 except Exception:
                     pass
 
