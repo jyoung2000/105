@@ -3,7 +3,7 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 import httpx
 from src.api.models import (
@@ -422,46 +422,98 @@ async def baserow_image_proxy(url: str = Query(..., description="Baserow file UR
     if not api_url or not api_token:
         raise HTTPException(400, "Baserow not configured")
 
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+
     # Resolve relative URLs against the Baserow API URL
     if url.startswith("/"):
         url = api_url.rstrip("/") + url
+        parsed = urlparse(url)
 
-    # Security check: only proxy Baserow media paths, not arbitrary URLs.
-    # Self-hosted Baserow may return URLs with internal hostnames (e.g.,
-    # http://localhost:8000/media/...) so we check the path, not just the origin.
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    api_parsed = urlparse(api_url)
-    is_media_path = parsed.path.startswith("/media/") or parsed.path.startswith("/api/user-files/")
-    is_same_host = parsed.netloc == api_parsed.netloc
-    is_known_baserow_host = url.startswith(api_url.rstrip("/"))
-
-    if not (is_known_baserow_host or (is_media_path and is_same_host)):
-        # If the host doesn't match but it's a Baserow media path, re-route
-        # through the configured API URL (handles internal Docker hostnames)
-        if is_media_path:
-            url = api_url.rstrip("/") + parsed.path
-        else:
+    # For any /media/ or /api/user-files/ path, always rewrite to use
+    # the configured API URL.  Self-hosted Baserow in Docker frequently
+    # returns internal hostnames (e.g. http://baserow:8080/media/...) that
+    # are unreachable from the scraper container's perspective.
+    is_media_path = (
+        parsed.path.startswith("/media/")
+        or parsed.path.startswith("/api/user-files/")
+    )
+    if is_media_path:
+        url = api_url.rstrip("/") + parsed.path
+    else:
+        # Not a media path — verify it belongs to the configured Baserow
+        api_parsed = urlparse(api_url)
+        if parsed.netloc and parsed.netloc != api_parsed.netloc:
             raise HTTPException(400, "URL does not belong to configured Baserow instance")
 
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0),
             follow_redirects=True,
-            headers={"Authorization": f"Token {api_token}"},
         ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "image/jpeg")
-            return StreamingResponse(
-                iter([resp.content]),
-                media_type=content_type,
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(e.response.status_code, f"Baserow returned {e.response.status_code}")
+            # Try with auth header first, then without (Baserow media is often public)
+            for headers in [
+                {"Authorization": f"Token {api_token}"},
+                {},
+            ]:
+                try:
+                    resp = await client.get(url, headers=headers)
+                    if resp.status_code < 400:
+                        content_type = resp.headers.get("content-type", "image/jpeg")
+                        return StreamingResponse(
+                            iter([resp.content]),
+                            media_type=content_type,
+                            headers={"Cache-Control": "public, max-age=86400"},
+                        )
+                except httpx.HTTPStatusError:
+                    continue
+            # Both attempts failed — raise error
+            raise HTTPException(502, f"Baserow returned error for {parsed.path}")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Failed to fetch image: {e}")
+
+
+@router.get("/baserow/file/{file_path:path}")
+async def baserow_file(file_path: str):
+    """Serve a Baserow media file directly by its path.
+
+    Usage: /api/baserow/file/user_files/abc123.jpg
+    This constructs {api_url}/media/{file_path} and proxies it.
+    """
+    cfg = config_store.get_section("baserow")
+    api_url = cfg.get("api_url", "")
+    api_token = cfg.get("api_token", "")
+    if not api_url or not api_token:
+        raise HTTPException(400, "Baserow not configured")
+
+    url = f"{api_url.rstrip('/')}/media/{file_path}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            follow_redirects=True,
+        ) as client:
+            for headers in [
+                {"Authorization": f"Token {api_token}"},
+                {},
+            ]:
+                try:
+                    resp = await client.get(url, headers=headers)
+                    if resp.status_code < 400:
+                        content_type = resp.headers.get("content-type", "image/jpeg")
+                        return StreamingResponse(
+                            iter([resp.content]),
+                            media_type=content_type,
+                            headers={"Cache-Control": "public, max-age=86400"},
+                        )
+                except httpx.HTTPStatusError:
+                    continue
+            raise HTTPException(502, f"Baserow returned error for /media/{file_path}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Failed to fetch file: {e}")
 
 
 @router.get("/baserow/rows")
@@ -616,3 +668,49 @@ async def get_logs(lines: int = 200, level: str = ""):
         }
     except Exception as e:
         return {"lines": [f"Error reading logs: {e}"], "total": 0, "file": str(log_file)}
+
+
+# === Favicon ===
+
+FAVICON_DIR = data_path("config")
+
+
+@router.post("/favicon")
+async def upload_favicon(file: UploadFile = File(...)):
+    """Upload a custom favicon (PNG, ICO, or SVG)."""
+    if not file.content_type or not any(
+        t in file.content_type for t in ["image/png", "image/x-icon", "image/svg", "image/vnd.microsoft.icon"]
+    ):
+        raise HTTPException(400, "Favicon must be PNG, ICO, or SVG")
+    contents = await file.read()
+    if len(contents) > 512_000:  # 500KB limit
+        raise HTTPException(400, "Favicon too large (max 500KB)")
+    FAVICON_DIR.mkdir(parents=True, exist_ok=True)
+    ext = "ico" if "icon" in (file.content_type or "") else "png"
+    if "svg" in (file.content_type or ""):
+        ext = "svg"
+    favicon_path = FAVICON_DIR / f"favicon.{ext}"
+    # Remove old favicons
+    for old in FAVICON_DIR.glob("favicon.*"):
+        if old.suffix in (".png", ".ico", ".svg"):
+            old.unlink(missing_ok=True)
+    favicon_path.write_bytes(contents)
+    return {"status": "saved", "path": str(favicon_path)}
+
+
+@router.delete("/favicon")
+async def delete_favicon():
+    """Remove custom favicon and revert to default."""
+    for old in FAVICON_DIR.glob("favicon.*"):
+        if old.suffix in (".png", ".ico", ".svg"):
+            old.unlink(missing_ok=True)
+    return {"status": "deleted"}
+
+
+@router.get("/favicon")
+async def get_favicon_info():
+    """Return favicon status."""
+    for ext in ("png", "ico", "svg"):
+        if (FAVICON_DIR / f"favicon.{ext}").is_file():
+            return {"has_custom": True, "ext": ext}
+    return {"has_custom": False}

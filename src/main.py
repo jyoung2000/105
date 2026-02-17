@@ -124,6 +124,23 @@ async def serve_thumbnail(filename: str):
     return Response(status_code=404)
 
 
+@app.get("/favicon.ico")
+async def favicon():
+    """Serve custom favicon if uploaded, otherwise return default SVG favicon."""
+    for ext in ("ico", "png", "svg"):
+        custom = data_path("config") / f"favicon.{ext}"
+        if custom.is_file():
+            media = {"ico": "image/x-icon", "png": "image/png", "svg": "image/svg+xml"}
+            return FileResponse(str(custom), media_type=media.get(ext, "image/x-icon"))
+    # Default: return an inline SVG wallpaper icon
+    svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="6" fill="#0a84ff"/>
+      <path d="M6 22l6-8 4 5 4-6 6 9H6z" fill="rgba(255,255,255,0.9)"/>
+      <circle cx="22" cy="10" r="3" fill="rgba(255,255,255,0.8)"/>
+    </svg>'''
+    return Response(content=svg, media_type="image/svg+xml")
+
+
 @app.get("/")
 async def index():
     """Serve the main HTML page."""

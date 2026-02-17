@@ -820,6 +820,47 @@ async function saveSettings() {
     } catch (e) { toast('Failed to save settings', 'error'); }
 }
 
+// ==================== FAVICON ====================
+async function uploadFavicon() {
+    const input = document.getElementById('favicon-file');
+    if (!input.files || input.files.length === 0) {
+        toast('Select a file first', 'error');
+        return;
+    }
+    const file = input.files[0];
+    if (file.size > 512000) {
+        toast('File too large (max 500KB)', 'error');
+        return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const res = await fetch('/api/favicon', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(await res.text());
+        toast('Favicon uploaded', 'success');
+        // Refresh favicon in browser
+        document.getElementById('favicon-preview').src = '/favicon.ico?' + Date.now();
+        const link = document.querySelector('link[rel="icon"]');
+        if (link) link.href = '/favicon.ico?' + Date.now();
+        document.getElementById('favicon-status').textContent = 'Custom favicon active';
+    } catch (e) {
+        toast('Upload failed: ' + e.message, 'error');
+    }
+}
+
+async function deleteFavicon() {
+    try {
+        await api('/api/favicon', { method: 'DELETE' });
+        toast('Favicon reset to default', 'success');
+        document.getElementById('favicon-preview').src = '/favicon.ico?' + Date.now();
+        const link = document.querySelector('link[rel="icon"]');
+        if (link) link.href = '/favicon.ico?' + Date.now();
+        document.getElementById('favicon-status').textContent = 'Using default favicon';
+    } catch (e) {
+        toast('Reset failed', 'error');
+    }
+}
+
 // ==================== BASEROW ====================
 async function loadBaserowConfig() {
     try {
@@ -1031,16 +1072,43 @@ function browseField(row, scraperField) {
     return row[colName];
 }
 
+function directFileUrl(mediaPath) {
+    // Build a URL via the direct /api/baserow/file/ endpoint.
+    // This avoids all URL encoding/hostname issues — just pass the media path.
+    // e.g. "/media/user_files/abc.jpg" -> "/api/baserow/file/user_files/abc.jpg"
+    //      "http://baserow:8080/media/thumbnails/small/abc.jpg"
+    //        -> "/api/baserow/file/thumbnails/small/abc.jpg"
+    if (!mediaPath) return '';
+
+    // Extract the path after /media/
+    let path = mediaPath;
+    const mediaIdx = path.indexOf('/media/');
+    if (mediaIdx >= 0) {
+        path = path.substring(mediaIdx + 7); // after "/media/"
+    } else if (path.startsWith('/')) {
+        // Relative path like /media/... already handled, try stripping leading /
+        path = path.replace(/^\/+/, '');
+    } else if (path.startsWith('http')) {
+        // Full URL — extract path component
+        try {
+            const u = new URL(path);
+            const mi = u.pathname.indexOf('/media/');
+            if (mi >= 0) {
+                path = u.pathname.substring(mi + 7);
+            } else {
+                path = u.pathname.replace(/^\/+/, '');
+            }
+        } catch (e) { /* keep as-is */ }
+    }
+    return '/api/baserow/file/' + path;
+}
+
 function proxyImgUrl(rawUrl) {
-    // Route all Baserow image URLs through our backend proxy to avoid
-    // CORS, auth, and relative-URL issues.
+    // Fallback: route through the image-proxy endpoint (handles URL rewriting)
     if (!rawUrl) return '';
-    // Resolve relative URLs against the Baserow api_url
     if (rawUrl.startsWith('/')) {
         rawUrl = browseApiUrl.replace(/\/+$/, '') + rawUrl;
     }
-    // If the URL has a different origin than our Baserow api_url (e.g., internal
-    // Docker hostname), replace the origin with the configured api_url
     if (browseApiUrl && rawUrl.startsWith('http')) {
         try {
             const urlObj = new URL(rawUrl);
@@ -1050,8 +1118,6 @@ function proxyImgUrl(rawUrl) {
             }
         } catch (e) { /* keep rawUrl as-is */ }
     }
-    // Ensure the URL actually has a protocol — some Baserow configs return
-    // protocol-relative or bare hostnames
     if (rawUrl && !rawUrl.startsWith('http') && !rawUrl.startsWith('/')) {
         rawUrl = browseApiUrl.replace(/\/+$/, '') + '/' + rawUrl;
     }
@@ -1059,38 +1125,38 @@ function proxyImgUrl(rawUrl) {
 }
 
 function browseFileUrl(file) {
-    // Extract best URL from a Baserow file object. Tries multiple sources
-    // since self-hosted Baserow may return internal URLs or omit url entirely.
+    // Extract best URL from a Baserow file object.
     if (!file) return '';
-    // 1. Try file.url (standard Baserow response — most reliable)
     if (file.url) return file.url;
-    // 2. Try file.original_name or file.visible_name path
     if (file.name) return '/media/user_files/' + file.name;
     return '';
 }
 
 function browseThumbnailUrl(row) {
-    // Try to use Baserow's built-in thumbnails for faster loading,
-    // falling back to the full image URL if thumbnails aren't available.
+    // Primary: use direct file endpoint (most reliable for Docker setups).
+    // Tries thumbnail variants first, then full image.
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
     const file = fileField[0];
 
-    // Baserow provides thumbnail variants in file.thumbnails
+    // Try Baserow thumbnail variants via direct endpoint
     if (file.thumbnails) {
-        // Prefer 'small' (200px) for grid, then 'tiny' (64px)
         const thumb = file.thumbnails.small || file.thumbnails.tiny || file.thumbnails.card_cover;
-        if (thumb && thumb.url) return proxyImgUrl(thumb.url);
+        if (thumb && thumb.url) return directFileUrl(thumb.url);
     }
 
-    // Fall back to full image via proxy
-    return proxyImgUrl(browseFileUrl(file));
+    // Fall back to full image via direct endpoint
+    const fileUrl = browseFileUrl(file);
+    if (fileUrl) return directFileUrl(fileUrl);
+
+    return '';
 }
 
 function browseImageUrl(row) {
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
-    return proxyImgUrl(browseFileUrl(fileField[0]));
+    const fileUrl = browseFileUrl(fileField[0]);
+    return fileUrl ? directFileUrl(fileUrl) : '';
 }
 
 function renderBrowseGrid(rows) {
@@ -1132,17 +1198,37 @@ function renderBrowseGrid(rows) {
 }
 
 function handleBrowseImgError(img, rowId, idx) {
-    // Try falling back to the full image URL if thumbnail failed
+    // Cascading fallback: direct full -> proxy thumbnail -> proxy full
     const row = window._browseRows && window._browseRows[idx];
-    if (row && !img.dataset.retried) {
+    const retryCount = parseInt(img.dataset.retried || '0');
+
+    if (row && retryCount === 0) {
+        // Attempt 1: direct endpoint with full image
         img.dataset.retried = '1';
         const fullUrl = browseImageUrl(row);
-        if (fullUrl && fullUrl !== img.src) {
-            img.src = fullUrl;
-            return;
+        if (fullUrl && fullUrl !== img.src) { img.src = fullUrl; return; }
+    }
+    if (row && retryCount <= 1) {
+        // Attempt 2: proxy endpoint with thumbnail
+        img.dataset.retried = '2';
+        const fileField = browseField(row, 'imageFile');
+        if (fileField && Array.isArray(fileField) && fileField.length > 0) {
+            const file = fileField[0];
+            const thumbObj = file.thumbnails && (file.thumbnails.small || file.thumbnails.tiny);
+            const tryUrl = thumbObj ? proxyImgUrl(thumbObj.url) : proxyImgUrl(browseFileUrl(file));
+            if (tryUrl && tryUrl !== img.src) { img.src = tryUrl; return; }
         }
     }
-    // All URLs failed — show error state with retry button
+    if (row && retryCount <= 2) {
+        // Attempt 3: proxy endpoint with full image
+        img.dataset.retried = '3';
+        const fileField = browseField(row, 'imageFile');
+        if (fileField && Array.isArray(fileField) && fileField.length > 0) {
+            const tryUrl = proxyImgUrl(browseFileUrl(fileField[0]));
+            if (tryUrl && tryUrl !== img.src) { img.src = tryUrl; return; }
+        }
+    }
+    // All fallbacks exhausted — show error state with retry button
     img.style.display = 'none';
     const container = img.parentElement;
     container.classList.remove('browse-item-loading');
@@ -1240,15 +1326,11 @@ async function showBrowseDetail(rowId) {
         const isMobile = getF('isMobile');
         const imgHash = getF('imgHash') || '';
 
-        // Get full image URL from file field, proxied through our backend
+        // Get full image URL from file field via direct endpoint
         const fileField = getF('imageFile');
         let fullImgUrl = '';
         if (fileField && Array.isArray(fileField) && fileField.length > 0) {
-            // Save browseApiUrl temporarily and use the detail-specific api_url
-            const savedApiUrl = browseApiUrl;
-            browseApiUrl = detailApiUrl;
-            fullImgUrl = proxyImgUrl(browseFileUrl(fileField[0]));
-            browseApiUrl = savedApiUrl;
+            fullImgUrl = directFileUrl(browseFileUrl(fileField[0]));
         }
 
         showModal(`

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wallpaper Scraper</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
@@ -305,6 +306,18 @@
             </div>
 
             <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+
+            <div class="card" style="margin-top:1.5rem">
+                <div class="card-title">Favicon</div>
+                <p style="font-size:13px;color:var(--text-tertiary);margin-bottom:1rem">Upload a custom favicon (PNG, ICO, or SVG, max 500KB). Leave empty to use the default.</p>
+                <div style="display:flex;align-items:center;gap:1rem">
+                    <img id="favicon-preview" src="/favicon.ico" style="width:32px;height:32px;border-radius:4px;background:var(--bg-active)">
+                    <input type="file" id="favicon-file" accept=".png,.ico,.svg,image/png,image/x-icon,image/svg+xml" style="font-size:13px">
+                    <button class="btn btn-sm btn-primary" onclick="uploadFavicon()">Upload</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteFavicon()">Reset</button>
+                </div>
+                <div id="favicon-status" style="font-size:12px;color:var(--text-muted);margin-top:0.5rem"></div>
+            </div>
         </div>
 
         <!-- ==================== Baserow ==================== -->
