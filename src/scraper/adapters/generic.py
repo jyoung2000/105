@@ -29,6 +29,21 @@ HIGHRES_PATTERNS = [
     r"full[_-]size", r"[_-]large", r"[_-]big", r"/orig/", r"[_-]orig\b",
 ]
 
+# URL path segments that indicate non-full-resolution images, with upgrade alternatives.
+# When a found image URL contains a preview pattern (left), try the replacements (right)
+# to get the full-resolution version before falling back to the preview.
+URL_UPGRADE_MAP = [
+    ("/wallpaper/nbig/", ["/wallpaper/original/"]),       # Goodfon medium-large preview
+    ("/wallpaper/big/", ["/wallpaper/original/"]),         # Goodfon large preview
+    ("/resized/", ["/original/"]),
+    ("/compressed/", ["/original/"]),
+    ("/medium/", ["/original/", "/large/"]),
+    ("/small/", ["/original/", "/large/"]),
+    ("/thumb/", ["/original/", "/large/"]),
+    ("/thumbnails/", ["/original/"]),
+    ("/preview/", ["/original/", "/full/"]),
+]
+
 # Patterns to exclude (thumbnails, icons, UI elements, ads, e-commerce CDNs)
 EXCLUDE_PATTERNS = [
     r"logo", r"icon", r"avatar", r"banner", r"sprite",
@@ -134,6 +149,24 @@ class GenericAdapter(BaseAdapter):
     - Listing/gallery pages: have many thumbnails, each linking to a detail page
     - Detail pages: have one main image + optional download button
     """
+
+    @staticmethod
+    def get_upgraded_urls(url: str) -> list[str]:
+        """Generate higher-resolution URL alternatives by replacing known preview path segments.
+
+        Returns a list of URLs to try before falling back to the original.
+        E.g. '/wallpaper/nbig/...' -> ['/wallpaper/original/...']
+        """
+        url_lower = url.lower()
+        alternatives = []
+        for pattern, replacements in URL_UPGRADE_MAP:
+            if pattern in url_lower:
+                idx = url_lower.index(pattern)
+                for replacement in replacements:
+                    upgraded = url[:idx] + replacement + url[idx + len(pattern):]
+                    if upgraded != url:
+                        alternatives.append(upgraded)
+        return alternatives
 
     def __init__(self, min_width: int = MIN_WIDTH, min_height: int = MIN_HEIGHT):
         self.min_width = min_width
@@ -438,6 +471,10 @@ class GenericAdapter(BaseAdapter):
                     if not href:
                         continue
                     abs_url = urljoin(page_url, href)
+                    # Skip links that resolve to the site homepage/root
+                    link_path = urlparse(abs_url).path.rstrip("/")
+                    if not link_path:
+                        continue
                     text = link.get_text(strip=True)
                     if self._is_image_url(abs_url) and not self._is_excluded(abs_url):
                         candidates.append((abs_url, text, link, 6))
@@ -455,6 +492,9 @@ class GenericAdapter(BaseAdapter):
                                         "original size", "download wallpaper"]):
                 href = link.get("href", "")
                 abs_url = urljoin(page_url, href)
+                link_path = urlparse(abs_url).path.rstrip("/")
+                if not link_path:
+                    continue  # Skip homepage links
                 link_root = self._root_domain(urlparse(abs_url).netloc)
                 if link_root == page_root:
                     candidates.append((abs_url, text, link, 7))
@@ -539,6 +579,10 @@ class GenericAdapter(BaseAdapter):
             score -= 50
         if any(w in combined for w in ["medium", "med "]):
             score -= 20
+
+        # Penalize known preview URL path segments (non-full-res variants)
+        if any(p in combined for p in ["/nbig/", "/wallpaper/big/", "/resized/", "/compressed/"]):
+            score -= 30
 
         return score
 
@@ -762,6 +806,10 @@ class GenericAdapter(BaseAdapter):
         path = urlparse(url).path
         if len(path) < 10:
             score -= 1
+        # Penalize known preview/non-full-res URL path segments
+        if any(p in url_lower for p in ["/nbig/", "/wallpaper/big/", "/resized/",
+                                         "/compressed/", "/medium/"]):
+            score -= 2
         return max(0, score)
 
     def _find_highres_source(self, img, page_url: str) -> Optional[str]:

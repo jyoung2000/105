@@ -462,9 +462,24 @@ class ScraperEngine:
             validator = self._get_validator()
 
         try:
-            # Download (with referer for hotlink protection)
-            logger.info(f"Downloading: {img.url[:100]}")
-            dl_path = await self.downloader.download(img.url, referer=img.page_url)
+            # Try upgraded URLs first (e.g., /wallpaper/nbig/ -> /wallpaper/original/)
+            # This ensures we get full-resolution images instead of previews/thumbnails
+            dl_path = None
+            used_url = img.url
+            upgraded_urls = GenericAdapter.get_upgraded_urls(img.url)
+            for upgraded_url in upgraded_urls:
+                logger.info(f"Trying full-res URL: {upgraded_url[:100]}")
+                dl_path = await self.downloader.download(upgraded_url, referer=img.page_url)
+                if dl_path is not None:
+                    used_url = upgraded_url
+                    logger.info(f"Full-res URL succeeded: {upgraded_url[:100]}")
+                    break
+
+            # Fall back to original URL if no upgrade worked
+            if dl_path is None:
+                logger.info(f"Downloading: {img.url[:100]}")
+                dl_path = await self.downloader.download(img.url, referer=img.page_url)
+
             if dl_path is None:
                 result.error = "Download failed"
                 logger.warning(f"Download failed: {img.url[:100]}")
@@ -520,7 +535,7 @@ class ScraperEngine:
                 wallpaperTitle=title,
                 Width=width,
                 Height=height,
-                imgUrl=img.url,
+                imgUrl=used_url,
                 altText=alt_text,
                 artistText=img.artist,
                 artistLink=img.artist_link,
