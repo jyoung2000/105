@@ -53,3 +53,8 @@ class SettingsUpdate(BaseModel):
     scheduler: Optional[dict] = None
     gallery: Optional[dict] = None
     ai: Optional[dict] = None
+
+
+class FaviconUpload(BaseModel):
+    data: str  # base64-encoded file content
+    filename: str  # original filename for extension detection

@@ -15,5 +15,6 @@ rich
 tenacity
 aiofiles
 python-dotenv
+python-multipart
 transformers
 accelerate

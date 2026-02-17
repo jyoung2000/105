@@ -3,13 +3,13 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 import httpx
 from src.api.models import (
     ScrapeRequest, SourceCreate, SourceUpdate, SourceReorder,
     QueryCreate, QueryUpdate, BaserowConfig,
-    FieldMappingUpdate, SettingsUpdate,
+    FieldMappingUpdate, SettingsUpdate, FaviconUpload,
 )
 from src.api.jobs import job_queue
 from src.scraper.engine import scraper_engine
@@ -676,19 +676,34 @@ FAVICON_DIR = data_path("config")
 
 
 @router.post("/favicon")
-async def upload_favicon(file: UploadFile = File(...)):
-    """Upload a custom favicon (PNG, ICO, or SVG)."""
-    if not file.content_type or not any(
-        t in file.content_type for t in ["image/png", "image/x-icon", "image/svg", "image/vnd.microsoft.icon"]
-    ):
+async def upload_favicon(data: FaviconUpload):
+    """Upload a custom favicon (PNG, ICO, or SVG) via base64 JSON."""
+    import base64
+
+    # Detect extension from filename
+    filename = data.filename.lower()
+    if filename.endswith(".svg"):
+        ext = "svg"
+    elif filename.endswith(".ico"):
+        ext = "ico"
+    elif filename.endswith(".png"):
+        ext = "png"
+    else:
         raise HTTPException(400, "Favicon must be PNG, ICO, or SVG")
-    contents = await file.read()
+
+    # Decode base64 data (strip data URL prefix if present)
+    raw = data.data
+    if "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        contents = base64.b64decode(raw)
+    except Exception:
+        raise HTTPException(400, "Invalid base64 data")
+
     if len(contents) > 512_000:  # 500KB limit
         raise HTTPException(400, "Favicon too large (max 500KB)")
+
     FAVICON_DIR.mkdir(parents=True, exist_ok=True)
-    ext = "ico" if "icon" in (file.content_type or "") else "png"
-    if "svg" in (file.content_type or ""):
-        ext = "svg"
     favicon_path = FAVICON_DIR / f"favicon.{ext}"
     # Remove old favicons
     for old in FAVICON_DIR.glob("favicon.*"):

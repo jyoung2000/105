@@ -832,20 +832,25 @@ async function uploadFavicon() {
         toast('File too large (max 500KB)', 'error');
         return;
     }
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-        const res = await fetch('/api/favicon', { method: 'POST', body: formData });
-        if (!res.ok) throw new Error(await res.text());
-        toast('Favicon uploaded', 'success');
-        // Refresh favicon in browser
-        document.getElementById('favicon-preview').src = '/favicon.ico?' + Date.now();
-        const link = document.querySelector('link[rel="icon"]');
-        if (link) link.href = '/favicon.ico?' + Date.now();
-        document.getElementById('favicon-status').textContent = 'Custom favicon active';
-    } catch (e) {
-        toast('Upload failed: ' + e.message, 'error');
-    }
+    // Read file as base64 and send as JSON
+    const reader = new FileReader();
+    reader.onload = async function () {
+        try {
+            await api('/api/favicon', {
+                method: 'POST',
+                body: { data: reader.result, filename: file.name }
+            });
+            toast('Favicon uploaded', 'success');
+            // Refresh favicon in browser
+            document.getElementById('favicon-preview').src = '/favicon.ico?' + Date.now();
+            const link = document.querySelector('link[rel="icon"]');
+            if (link) link.href = '/favicon.ico?' + Date.now();
+            document.getElementById('favicon-status').textContent = 'Custom favicon active';
+        } catch (e) {
+            toast('Upload failed: ' + e.message, 'error');
+        }
+    };
+    reader.readAsDataURL(file);
 }
 
 async function deleteFavicon() {
