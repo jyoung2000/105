@@ -309,14 +309,43 @@ class ScraperEngine:
         profile.record_scrape_stats(job.images_found, job.images_uploaded)
         profile.save()
 
+    @staticmethod
+    def _page_is_blocked(html: str) -> bool:
+        """Check if the returned HTML is a challenge/block page, not real content."""
+        if not html or len(html) < 500:
+            return True
+        text = html[:2000].lower()
+        signals = [
+            "checking your browser", "just a moment", "verify you are human",
+            "attention required", "enable javascript and cookies",
+            "ddos protection", "access denied", "cf-browser-verification",
+            "_cf_chl", "challenge-platform",
+        ]
+        # If challenge signals are present AND there are very few images, it's blocked
+        has_challenge = any(s in text for s in signals)
+        if has_challenge:
+            return True
+        # Also check for very sparse pages (captcha pages have almost no <img> tags)
+        img_count = html.lower().count("<img")
+        if img_count == 0 and len(html) < 5000:
+            return True
+        return False
+
     async def _scrape_detail_pages(self, detail_links: list[dict], adapter, job: ScrapeJob,
                                     scroll_count: int, scroll_wait: int,
                                     profile=None) -> list:
-        """Visit individual detail/wallpaper pages to find full-size images."""
+        """Visit individual detail/wallpaper pages to find full-size images.
+
+        Includes adaptive back-off: if consecutive pages return 0 images (likely
+        blocked), the delay between requests increases to avoid triggering anti-bot.
+        """
         all_images = []
         max_details = config_store.get("scraping", "max_pages", default=10)
         # Limit detail pages per listing page to avoid runaway scraping
         links_to_visit = detail_links[:min(len(detail_links), max_details * 3)]
+
+        consecutive_failures = 0
+        base_delay = 2.0  # seconds — starts at 2-4s, increases on failures
 
         for i, link_info in enumerate(links_to_visit):
             detail_url = link_info["url"]
@@ -325,6 +354,25 @@ class ScraperEngine:
                 html = await browser_manager.get_page_content(
                     detail_url, scroll_count=min(scroll_count, 3), scroll_wait_ms=scroll_wait
                 )
+
+                # Detect blocked/challenge pages before parsing
+                if self._page_is_blocked(html):
+                    consecutive_failures += 1
+                    logger.warning(
+                        f"Detail page appears blocked ({consecutive_failures} in a row): {detail_url}"
+                    )
+                    if consecutive_failures >= 3:
+                        logger.warning(
+                            f"Site is blocking requests — stopping detail page crawl after "
+                            f"{consecutive_failures} consecutive blocked pages"
+                        )
+                        break
+                    # Back off significantly before trying next page
+                    backoff = base_delay * (2 ** consecutive_failures) + random.random() * 3
+                    logger.info(f"Backing off {backoff:.1f}s before next detail page")
+                    await asyncio.sleep(backoff)
+                    continue
+
                 images = await adapter.scrape(html, detail_url)
 
                 # Mark page as visited in site profile
@@ -332,6 +380,7 @@ class ScraperEngine:
                     profile.mark_visited(detail_url)
 
                 if images:
+                    consecutive_failures = 0  # Reset on success
                     # Carry forward metadata from the thumbnail link
                     for img in images:
                         if not img.alt and link_info.get("alt"):
@@ -345,13 +394,24 @@ class ScraperEngine:
                     if profile:
                         profile.update_hints(has_download_buttons=True)
                 else:
-                    logger.debug(f"No images found on detail page {detail_url}")
+                    consecutive_failures += 1
+                    logger.debug(f"No images found on detail page {detail_url} ({consecutive_failures} in a row)")
+                    if consecutive_failures >= 5:
+                        logger.warning(
+                            f"Stopping detail crawl — {consecutive_failures} consecutive pages "
+                            f"with no images (adapter may not match this site's layout)"
+                        )
+                        break
             except Exception as e:
+                consecutive_failures += 1
                 logger.warning(f"Failed to scrape detail page {detail_url}: {e}")
                 job.error_log.append(f"Detail page error: {e}")
 
-            # Randomized delay between detail pages (1-3s)
-            await asyncio.sleep(1 + random.random() * 2)
+            # Adaptive delay: longer when failures are accumulating
+            delay = base_delay + random.random() * 2
+            if consecutive_failures > 0:
+                delay += consecutive_failures * 1.5  # Extra 1.5s per consecutive failure
+            await asyncio.sleep(delay)
 
         # Batch save visited pages
         if profile:

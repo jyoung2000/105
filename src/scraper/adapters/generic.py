@@ -87,6 +87,20 @@ DETAIL_IMAGE_SELECTORS = [
     "img[itemprop='image']",
     "img.detail-image",
     "img.full-image",
+    # HDWallpapers.in and similar sites
+    "img.wallpaper",
+    "img.wall",
+    "a.download img",             # Download link wrapping an image
+    ".wallpaper-preview img",
+    ".wallpaper-detail img",
+    ".wallpaper-container img",
+    "#wallpaper-image",
+    "img[alt*='wallpaper']",      # Images with wallpaper in alt text
+    ".wall-img img",
+    ".preview img",
+    ".main-image img",
+    "img.photo",
+    "img.primary-image",
 ]
 
 # Selectors for download buttons/links on detail pages
@@ -100,6 +114,14 @@ DOWNLOAD_SELECTORS = [
     "a[data-action='download']",
     "a[title*='Download']",
     "a[title*='download']",
+    # HDWallpapers.in and similar
+    "a[href*='download']",
+    "a.wallpaper-download",
+    "a[class*='download']",
+    ".download-links a",
+    ".download-resolutions a",
+    "a[href*='getwall']",
+    "a[href*='original']",
 ]
 
 
@@ -295,8 +317,8 @@ class GenericAdapter(BaseAdapter):
                           seen_urls: set) -> Optional[ScrapedImage]:
         """Find the single main/hero image on a detail page.
 
-        Looks for the largest image by explicit dimensions or container context.
-        Only returns a result if there's a clearly dominant image.
+        Looks for the largest image by explicit dimensions, container context,
+        or URL quality score. Works even when images lack width/height attributes.
         """
         candidates = []
         for img in soup.find_all("img"):
@@ -318,35 +340,50 @@ class GenericAdapter(BaseAdapter):
             height = self._parse_dim(img.get("height", ""))
             area = width * height if width and height else 0
 
-            # Also check container/wrapper clues
+            # Check container/wrapper clues
             parent_classes = ""
+            parent_ids = ""
+            img_classes = " ".join(img.get("class", []))
+            img_id = img.get("id", "")
             parent = img.parent
-            for _ in range(3):
+            for _ in range(4):
                 if parent and hasattr(parent, 'get'):
                     parent_classes += " " + " ".join(parent.get("class", []))
+                    parent_ids += " " + (parent.get("id", "") or "")
                     parent = getattr(parent, 'parent', None)
                 else:
                     break
 
-            is_hero_context = any(k in parent_classes.lower() for k in
+            all_context = (parent_classes + " " + parent_ids + " " + img_classes + " " + img_id).lower()
+            is_hero_context = any(k in all_context for k in
                                   ["wallpaper", "hero", "main", "detail", "full", "preview",
-                                   "show", "view", "content-image", "single"])
+                                   "show", "view", "content-image", "single", "primary",
+                                   "featured", "cover", "display", "zoom"])
 
-            if area > 0 or is_hero_context:
-                score = self._score_url(abs_url)
-                if is_hero_context:
-                    score += 3
+            score = self._score_url(abs_url)
+            if is_hero_context:
+                score += 3
+            if area > 0:
+                score += 1
+
+            # Accept any non-excluded image as a candidate — let scoring decide
+            # (many detail pages have images without explicit dimensions)
+            if score >= 1:
                 candidates.append((abs_url, img, width, height, area, score))
 
         if not candidates:
             return None
 
-        # Pick the image with the largest area, or highest score if no dimensions
-        candidates.sort(key=lambda x: (x[4], x[5]), reverse=True)
-        best_url, best_img, w, h, _, _ = candidates[0]
+        # Pick the image with the highest score, breaking ties by area
+        candidates.sort(key=lambda x: (x[5], x[4]), reverse=True)
+        best_url, best_img, w, h, _, best_score = candidates[0]
 
-        # Only accept if it's clearly wallpaper-sized or has good context clues
-        if w >= self.min_width or h >= self.min_height or len(candidates) <= 3:
+        # Accept if: has good dimensions, has hero context, has high URL score,
+        # or is one of very few image candidates (typical for detail pages)
+        total_images = len(soup.find_all("img"))
+        if (w >= self.min_width or h >= self.min_height
+                or best_score >= 3
+                or total_images <= 10):
             seen_urls.add(best_url)
             alt = best_img.get("alt", "") or ""
             title = best_img.get("title", "") or alt

@@ -148,7 +148,11 @@ class BrowserManager:
 
     async def get_page_content(self, url: str, wait_time: int = 3000,
                                scroll_count: int = 5, scroll_wait_ms: int = 800) -> str:
-        """Navigate to URL and return page HTML content with human-like behavior."""
+        """Navigate to URL and return page HTML content with human-like behavior.
+
+        Detects Cloudflare/CAPTCHA challenge pages and waits for them to auto-solve
+        before returning content.
+        """
         page = await self.get_page()
         try:
             # Set referer based on the target URL's domain
@@ -158,6 +162,9 @@ class BrowserManager:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000,
                             referer=referer)
             await page.wait_for_timeout(jitter(wait_time))
+
+            # Check if we landed on a challenge/captcha page and wait it out
+            await self._wait_through_challenge(page)
 
             # Human-like scrolling with variable speed
             for i in range(scroll_count):
@@ -177,6 +184,68 @@ class BrowserManager:
             return await page.content()
         finally:
             await page.close()
+
+    # Strings that indicate a challenge/captcha page (Cloudflare, DDoS-Guard, etc.)
+    _CHALLENGE_SIGNALS = [
+        "checking your browser",   # Cloudflare classic
+        "just a moment",           # Cloudflare
+        "verify you are human",    # hCaptcha / Cloudflare Turnstile
+        "attention required",      # Cloudflare block page
+        "enable javascript and cookies", # DDoS-Guard
+        "ddos protection",         # Generic
+        "challenge-platform",      # Cloudflare Turnstile iframe
+        "cf-browser-verification", # Cloudflare old
+        "_cf_chl",                 # Cloudflare challenge parameter
+        "access denied",           # WAF block
+        "ray id",                  # Cloudflare error pages
+    ]
+
+    async def _wait_through_challenge(self, page, max_wait_s: int = 15) -> bool:
+        """Detect Cloudflare/CAPTCHA challenge pages and wait for auto-solve.
+
+        Many challenge pages auto-solve via JS within 5-10 seconds. We check the
+        page content for challenge signals and wait for them to disappear (indicating
+        the real page loaded). Returns True if a challenge was detected and resolved.
+        """
+        try:
+            body_text = await page.evaluate("document.body?.innerText?.substring(0, 1500)?.toLowerCase() || ''")
+            page_title = await page.evaluate("document.title?.toLowerCase() || ''")
+            combined = body_text + " " + page_title
+
+            is_challenge = any(signal in combined for signal in self._CHALLENGE_SIGNALS)
+            if not is_challenge:
+                return False
+
+            logger.info(f"Challenge page detected on {page.url}, waiting for auto-solve...")
+
+            # Wait for the page to change (challenge auto-solves → redirect or content swap)
+            waited = 0
+            check_interval = 2000  # ms
+            while waited < max_wait_s * 1000:
+                await page.wait_for_timeout(check_interval)
+                waited += check_interval
+
+                # Re-check if challenge is still present
+                try:
+                    body_text = await page.evaluate("document.body?.innerText?.substring(0, 1500)?.toLowerCase() || ''")
+                    page_title = await page.evaluate("document.title?.toLowerCase() || ''")
+                    combined = body_text + " " + page_title
+
+                    still_challenge = any(signal in combined for signal in self._CHALLENGE_SIGNALS)
+                    if not still_challenge:
+                        logger.info(f"Challenge resolved after {waited/1000:.1f}s on {page.url}")
+                        # Give the real page a moment to finish rendering
+                        await page.wait_for_timeout(jitter(2000))
+                        return True
+                except Exception:
+                    # Page might be navigating — wait and retry
+                    continue
+
+            logger.warning(f"Challenge did not auto-resolve after {max_wait_s}s on {page.url}")
+            return True  # Still a challenge, but we tried
+        except Exception as e:
+            logger.debug(f"Challenge detection error: {e}")
+            return False
 
     async def web_search(self, query: str) -> list[str]:
         """Search the web using httpx (not Playwright) for reliability.
