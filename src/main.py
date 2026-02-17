@@ -132,11 +132,29 @@ async def favicon():
         if custom.is_file():
             media = {"ico": "image/x-icon", "png": "image/png", "svg": "image/svg+xml"}
             return FileResponse(str(custom), media_type=media.get(ext, "image/x-icon"))
-    # Default: return an inline SVG wallpaper icon
+    # Default: painting being scraped — framed canvas with scraper tool
     svg = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-      <rect width="32" height="32" rx="6" fill="#0a84ff"/>
-      <path d="M6 22l6-8 4 5 4-6 6 9H6z" fill="rgba(255,255,255,0.9)"/>
-      <circle cx="22" cy="10" r="3" fill="rgba(255,255,255,0.8)"/>
+      <rect width="32" height="32" rx="6" fill="#1c1c1e"/>
+      <!-- Frame -->
+      <rect x="3" y="4" width="18" height="14" rx="1.5" fill="#8B6914" stroke="#A67C00" stroke-width="0.8"/>
+      <!-- Canvas -->
+      <rect x="5" y="6" width="14" height="10" rx="0.5" fill="#4A90D9"/>
+      <!-- Painting: sunset landscape -->
+      <rect x="5" y="12" width="14" height="4" rx="0.5" fill="#2D6A4F"/>
+      <circle cx="16" cy="8" r="2" fill="#FFD166"/>
+      <path d="M5 13l4-3 3 2 3-4 4 5v3H5z" fill="#3A8349"/>
+      <!-- Scraped/peeling section — top-right of canvas curling away -->
+      <path d="M15 6h4v4l-1.5 0.5L15 10z" fill="#4A90D9" opacity="0.4"/>
+      <path d="M19 6v4c0 0-0.5 1-2 1.5" stroke="#fff" stroke-width="0.4" fill="none" opacity="0.6"/>
+      <!-- Scraper tool (diagonal, pulling paint off) -->
+      <rect x="19" y="2" width="3" height="8" rx="0.8" fill="#C0C0C0" transform="rotate(30 20.5 6)"/>
+      <rect x="19.4" y="1" width="2.2" height="3" rx="0.5" fill="#888" transform="rotate(30 20.5 6)"/>
+      <!-- Paint chips falling -->
+      <rect x="21" y="14" width="2" height="1.5" rx="0.3" fill="#4A90D9" opacity="0.7" transform="rotate(-15 22 14.75)"/>
+      <rect x="23" y="16" width="1.5" height="1" rx="0.2" fill="#FFD166" opacity="0.6" transform="rotate(10 23.75 16.5)"/>
+      <rect x="20" y="17" width="1.8" height="1.2" rx="0.3" fill="#3A8349" opacity="0.5" transform="rotate(-25 20.9 17.6)"/>
+      <!-- Download arrow at bottom -->
+      <path d="M16 23v5M13.5 26l2.5 2.5 2.5-2.5" stroke="#0a84ff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
     </svg>'''
     return Response(content=svg, media_type="image/svg+xml")
 
