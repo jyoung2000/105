@@ -22,12 +22,15 @@
     </nav>
 
     <div class="main">
-        <!-- Tab 1: Gallery -->
+
+        <!-- ==================== Gallery ==================== -->
         <div id="tab-gallery" class="tab-content active">
             <div class="stat-grid" id="gallery-stats"></div>
             <div class="gallery-controls">
-                <input type="text" id="gallery-search" placeholder="Search title/tags..." style="max-width:250px">
-                <select id="gallery-source-filter" style="max-width:200px"><option value="">All Sources</option></select>
+                <input type="text" id="gallery-search" placeholder="Search title or tags..." style="max-width:260px">
+                <select id="gallery-source-filter" style="max-width:200px">
+                    <option value="">All Sources</option>
+                </select>
                 <select id="gallery-status-filter" style="max-width:150px">
                     <option value="">All Status</option>
                     <option value="uploaded">Uploaded</option>
@@ -43,25 +46,25 @@
                 </div>
                 <div>
                     <div class="gallery-grid" id="gallery-grid"></div>
-                    <div style="text-align:center;margin-top:1rem">
+                    <div style="text-align:center;margin-top:1.5rem">
                         <button class="btn btn-secondary" id="load-more-btn" onclick="loadMoreGallery()" style="display:none">Load More</button>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Tab 2: Scrape -->
+        <!-- ==================== Scrape ==================== -->
         <div id="tab-scrape" class="tab-content">
             <div class="card">
                 <div class="card-title">Manual Scrape</div>
-                <div id="baserow-warning" style="display:none;background:#4a3a1a;border:1px solid #f39c12;padding:0.8rem;border-radius:6px;margin-bottom:1rem;color:#f39c12;font-size:0.85rem">
+                <div id="baserow-warning" class="baserow-warning" style="display:none">
                     Baserow not configured. Wallpapers will be scraped but not uploaded. Configure Baserow in the Baserow tab.
                 </div>
                 <div class="form-group">
                     <label>URL to scrape</label>
                     <textarea id="scrape-url" rows="2" placeholder="https://wallhaven.cc/search?sorting=views"></textarea>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+                <div class="settings-grid-2">
                     <div class="form-group">
                         <label>Source Name (optional)</label>
                         <input type="text" id="scrape-name" placeholder="My Source">
@@ -79,17 +82,16 @@
             </div>
         </div>
 
-        <!-- Tab 3: Sources -->
+        <!-- ==================== Sources ==================== -->
         <div id="tab-sources" class="tab-content">
             <div class="scheduler-banner" id="scheduler-banner">
-                <div>
+                <div style="display:flex;align-items:center">
                     <span class="status-dot" id="scheduler-dot"></span>
                     <span id="scheduler-text">Scheduler: Loading...</span>
                 </div>
-                <div>
-                    <button class="btn btn-sm btn-secondary" id="scheduler-toggle-btn" onclick="toggleScheduler()">Pause</button>
-                </div>
+                <button class="btn btn-sm btn-secondary" id="scheduler-toggle-btn" onclick="toggleScheduler()">Pause</button>
             </div>
+
             <div class="scraping-banner" id="scraping-banner" style="display:none">
                 <div class="scraping-banner-content">
                     <span class="spinner"></span>
@@ -99,26 +101,39 @@
                     </div>
                 </div>
                 <div class="scraping-banner-progress">
-                    <div class="progress" style="width:200px"><div class="progress-bar" id="scraping-banner-progress-bar"></div></div>
+                    <div class="progress" style="width:200px">
+                        <div class="progress-bar" id="scraping-banner-progress-bar"></div>
+                    </div>
                     <span class="scraping-banner-stats" id="scraping-banner-stats"></span>
                 </div>
             </div>
+
             <div class="discovery-banner" id="discovery-banner">
-                <div>
+                <div style="display:flex;align-items:center">
                     <span class="status-dot" id="discovery-dot"></span>
                     <span id="discovery-text">Discovery: Loading...</span>
                 </div>
-                <div id="discovery-next" style="font-size:0.8rem;color:var(--text-muted)"></div>
+                <div id="discovery-next" class="countdown"></div>
             </div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+
+            <div class="sources-header">
                 <h3>Wallpaper Sources</h3>
                 <button class="btn btn-primary btn-sm" onclick="showAddSourceModal()">Add Source</button>
             </div>
+
             <table>
                 <thead>
                     <tr>
-                        <th>Enabled</th><th>Status</th><th>Name</th><th>Category</th><th>Schedule</th>
-                        <th>Last Scraped</th><th>Next Run</th><th>Total</th><th>Health</th><th>Actions</th>
+                        <th>Enabled</th>
+                        <th>Status</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Schedule</th>
+                        <th>Last Scraped</th>
+                        <th>Next Run</th>
+                        <th>Total</th>
+                        <th>Health</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="sources-table"></tbody>
@@ -129,28 +144,36 @@
                 <span id="discovery-section-arrow">&#9650;</span>
             </div>
             <div class="collapsible-content open" id="discovery-section">
-                <div style="display:flex;gap:0.5rem;margin:0.8rem 0;align-items:center">
+                <div style="display:flex;gap:0.75rem;margin:1rem 0;align-items:center">
                     <input type="text" id="new-query-input" placeholder="Add search query..." style="max-width:300px">
                     <button class="btn btn-primary btn-sm" onclick="addQuery()">Add Query</button>
                     <button class="btn btn-secondary btn-sm" onclick="runDiscovery()">Discover Now</button>
                 </div>
                 <table>
                     <thead>
-                        <tr><th>Enabled</th><th>Query</th><th>Type</th><th>Used</th><th>Found</th><th>Last Used</th><th>Actions</th></tr>
+                        <tr>
+                            <th>Enabled</th>
+                            <th>Query</th>
+                            <th>Type</th>
+                            <th>Used</th>
+                            <th>Found</th>
+                            <th>Last Used</th>
+                            <th>Actions</th>
+                        </tr>
                     </thead>
                     <tbody id="queries-table"></tbody>
                 </table>
-                <div class="card" style="margin-top:1rem">
+                <div class="card" style="margin-top:1.25rem">
                     <div class="card-title">Discovery Log</div>
-                    <div id="discovery-log" style="font-size:0.85rem;color:var(--text-secondary)">No recent discovery results.</div>
+                    <div id="discovery-log" style="font-size:13px;color:var(--text-tertiary)">No recent discovery results.</div>
                 </div>
             </div>
         </div>
 
-        <!-- Tab 4: Jobs -->
+        <!-- ==================== Jobs ==================== -->
         <div id="tab-jobs" class="tab-content">
-            <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
-                <select id="jobs-status-filter" style="max-width:150px" onchange="loadJobs()">
+            <div style="margin-bottom:1.25rem">
+                <select id="jobs-status-filter" style="max-width:160px" onchange="loadJobs()">
                     <option value="">All Status</option>
                     <option value="running">Running</option>
                     <option value="completed">Completed</option>
@@ -159,103 +182,154 @@
             <div id="jobs-list"></div>
         </div>
 
-        <!-- Tab 5: Settings -->
+        <!-- ==================== Settings ==================== -->
         <div id="tab-settings" class="tab-content">
+
             <div class="card">
                 <div class="card-title">Resolution Filters</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-                    <div class="form-group"><label>Min Width</label><input type="number" id="set-min-width" value="800"></div>
-                    <div class="form-group"><label>Min Height</label><input type="number" id="set-min-height" value="600"></div>
+                <div class="settings-grid-2">
+                    <div class="form-group">
+                        <label>Min Width</label>
+                        <input type="number" id="set-min-width" value="800">
+                    </div>
+                    <div class="form-group">
+                        <label>Min Height</label>
+                        <input type="number" id="set-min-height" value="600">
+                    </div>
                 </div>
             </div>
+
             <div class="card">
                 <div class="card-title">Aspect Ratio Filters</div>
-                <p style="font-size:0.85rem;color:var(--text-secondary);margin:0 0 0.8rem 0">Select which aspect ratios to accept. Leave all unchecked to accept all ratios.</p>
-                <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:0.5rem" id="aspect-checkboxes">
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="16:9" class="aspect-cb"> 16:9 (Widescreen)</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="16:10" class="aspect-cb"> 16:10</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="21:9" class="aspect-cb"> 21:9 (Ultrawide)</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="32:9" class="aspect-cb"> 32:9 (Super UW)</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="4:3" class="aspect-cb"> 4:3</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="3:2" class="aspect-cb"> 3:2</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="5:4" class="aspect-cb"> 5:4</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="1:1" class="aspect-cb"> 1:1 (Square)</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="9:16" class="aspect-cb"> 9:16 (Mobile)</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="9:19" class="aspect-cb"> 9:19 (Mobile)</label>
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" value="9:20" class="aspect-cb"> 9:20 (Mobile)</label>
+                <p style="font-size:13px;color:var(--text-tertiary);margin-bottom:1rem">Select which aspect ratios to accept. Leave all unchecked to accept all ratios.</p>
+                <div class="aspect-grid" id="aspect-checkboxes">
+                    <label class="aspect-label"><input type="checkbox" value="16:9" class="aspect-cb"> 16:9 Widescreen</label>
+                    <label class="aspect-label"><input type="checkbox" value="16:10" class="aspect-cb"> 16:10</label>
+                    <label class="aspect-label"><input type="checkbox" value="21:9" class="aspect-cb"> 21:9 Ultrawide</label>
+                    <label class="aspect-label"><input type="checkbox" value="32:9" class="aspect-cb"> 32:9 Super UW</label>
+                    <label class="aspect-label"><input type="checkbox" value="4:3" class="aspect-cb"> 4:3</label>
+                    <label class="aspect-label"><input type="checkbox" value="3:2" class="aspect-cb"> 3:2</label>
+                    <label class="aspect-label"><input type="checkbox" value="5:4" class="aspect-cb"> 5:4</label>
+                    <label class="aspect-label"><input type="checkbox" value="1:1" class="aspect-cb"> 1:1 Square</label>
+                    <label class="aspect-label"><input type="checkbox" value="9:16" class="aspect-cb"> 9:16 Mobile</label>
+                    <label class="aspect-label"><input type="checkbox" value="9:19" class="aspect-cb"> 9:19 Mobile</label>
+                    <label class="aspect-label"><input type="checkbox" value="9:20" class="aspect-cb"> 9:20 Mobile</label>
                 </div>
-                <div style="margin-top:0.8rem">
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer"><input type="checkbox" id="set-allow-mobile" checked> Allow mobile/portrait wallpapers</label>
+                <div style="margin-top:1rem">
+                    <label class="aspect-label" style="display:inline-flex"><input type="checkbox" id="set-allow-mobile" checked> Allow mobile/portrait wallpapers</label>
                 </div>
             </div>
+
             <div class="card">
                 <div class="card-title">Image Filtering</div>
-                <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">
-                    <input type="checkbox" id="set-watermark-detection" checked>
-                    Watermark Detection
-                </label>
-                <p style="font-size:0.8rem;color:var(--text-secondary);margin:0.3rem 0 0 1.4rem">Reject images that appear to have stock photo watermarks (Shutterstock, iStock, etc.)</p>
-                <div style="margin-top:0.8rem">
-                    <label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer">
-                        <input type="checkbox" id="set-allow-nsfw">
-                        Allow NSFW / Adult Content
-                    </label>
-                    <p style="font-size:0.8rem;color:var(--text-secondary);margin:0.3rem 0 0 1.4rem">When disabled, the scraper will skip pages and images containing nudity, gore, violence, drugs, or other content inappropriate for young teens. Checks URLs, page metadata, image tags, and known NSFW domains. Default: OFF.</p>
+                <div class="settings-option">
+                    <input type="checkbox" id="set-watermark-detection" checked style="margin-top:3px">
+                    <div class="settings-option-text">
+                        <h4>Watermark Detection</h4>
+                        <p>Reject images that appear to have stock photo watermarks (Shutterstock, iStock, etc.)</p>
+                    </div>
+                </div>
+                <div class="settings-option">
+                    <input type="checkbox" id="set-allow-nsfw" style="margin-top:3px">
+                    <div class="settings-option-text">
+                        <h4>Allow NSFW / Adult Content</h4>
+                        <p>When disabled, the scraper will skip pages and images containing nudity, gore, violence, drugs, or other content inappropriate for young teens. Checks URLs, page metadata, image tags, and known NSFW domains. Default: OFF.</p>
+                    </div>
                 </div>
             </div>
+
             <div class="card">
                 <div class="card-title">Scraping</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem">
-                    <div class="form-group"><label>Max Pages</label><input type="number" id="set-max-pages" value="10"></div>
-                    <div class="form-group"><label>Page Delay (s)</label><input type="number" id="set-page-delay" value="2"></div>
-                    <div class="form-group"><label>Max Downloads</label><input type="number" id="set-max-dl" value="3"></div>
+                <div class="settings-grid-3">
+                    <div class="form-group">
+                        <label>Max Pages</label>
+                        <input type="number" id="set-max-pages" value="10">
+                    </div>
+                    <div class="form-group">
+                        <label>Page Delay (s)</label>
+                        <input type="number" id="set-page-delay" value="2">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Downloads</label>
+                        <input type="number" id="set-max-dl" value="3">
+                    </div>
                 </div>
             </div>
+
             <div class="card">
                 <div class="card-title">JPEG Compression</div>
-                <div class="form-group"><label>Quality (1-100)</label><input type="number" id="set-jpeg-quality" value="85" min="1" max="100"></div>
-            </div>
-            <div class="card">
-                <div class="card-title">Scheduler</div>
-                <div class="form-group"><label>Check Interval (minutes)</label><input type="number" id="set-check-interval" value="5"></div>
-            </div>
-            <div class="card">
-                <div class="card-title">Gallery</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-                    <div class="form-group"><label>Max Entries</label><input type="number" id="set-max-entries" value="5000"></div>
-                    <div class="form-group"><label>Max Thumbnails</label><input type="number" id="set-max-thumbs" value="5000"></div>
+                <div class="form-group">
+                    <label>Quality (1-100)</label>
+                    <input type="number" id="set-jpeg-quality" value="85" min="1" max="100">
                 </div>
             </div>
+
+            <div class="card">
+                <div class="card-title">Scheduler</div>
+                <div class="form-group">
+                    <label>Check Interval (minutes)</label>
+                    <input type="number" id="set-check-interval" value="5">
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Gallery</div>
+                <div class="settings-grid-2">
+                    <div class="form-group">
+                        <label>Max Entries</label>
+                        <input type="number" id="set-max-entries" value="5000">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Thumbnails</label>
+                        <input type="number" id="set-max-thumbs" value="5000">
+                    </div>
+                </div>
+            </div>
+
             <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
         </div>
 
-        <!-- Tab 6: Baserow -->
+        <!-- ==================== Baserow ==================== -->
         <div id="tab-baserow" class="tab-content">
             <div class="card">
                 <div class="card-title">Connection</div>
-                <div class="form-group"><label>API URL</label><input type="text" id="br-url" placeholder="https://baserow.jymedia.cc"></div>
+                <div class="form-group">
+                    <label>API URL</label>
+                    <input type="text" id="br-url" placeholder="https://baserow.jymedia.cc">
+                </div>
                 <div class="form-group">
                     <label>API Token</label>
                     <div style="display:flex;gap:0.5rem">
                         <input type="password" id="br-token" placeholder="Your API token">
-                        <button class="btn btn-sm btn-secondary" onclick="toggleTokenVisibility()">Show</button>
+                        <button class="btn btn-sm btn-secondary" onclick="toggleTokenVisibility()" style="flex-shrink:0">Show</button>
                     </div>
                 </div>
-                <div class="form-group"><label>Table ID</label><input type="number" id="br-table-id" placeholder="810"></div>
-                <div style="display:flex;gap:0.5rem">
+                <div class="form-group">
+                    <label>Table ID</label>
+                    <input type="number" id="br-table-id" placeholder="810">
+                </div>
+                <div style="display:flex;gap:0.75rem">
                     <button class="btn btn-primary" onclick="testBaserow()">Test Connection</button>
                     <button class="btn btn-success" onclick="saveBaserow()">Save</button>
                 </div>
-                <div id="br-test-result" style="margin-top:0.8rem"></div>
+                <div id="br-test-result" style="margin-top:1rem"></div>
             </div>
+
             <div class="card" id="field-mapping-section" style="display:none">
                 <div class="card-title">Field Mapping</div>
                 <div class="mapping-bar" id="mapping-bar"></div>
                 <table class="mapping-table">
-                    <thead><tr><th>Scraper Field</th><th></th><th>Baserow Column</th><th>Status</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>Scraper Field</th>
+                            <th></th>
+                            <th>Baserow Column</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
                     <tbody id="mapping-table"></tbody>
                 </table>
-                <div style="display:flex;gap:0.5rem;margin-top:1rem">
+                <div style="display:flex;gap:0.5rem;margin-top:1.25rem">
                     <button class="btn btn-primary btn-sm" onclick="refreshFields()">Refresh Fields</button>
                     <button class="btn btn-secondary btn-sm" onclick="autoMatchFields()">Auto-Match</button>
                     <button class="btn btn-secondary btn-sm" onclick="resetMapping()">Reset Defaults</button>
@@ -264,7 +338,7 @@
             </div>
         </div>
 
-        <!-- Tab 7: Browse Baserow -->
+        <!-- ==================== Browse Baserow ==================== -->
         <div id="tab-browse" class="tab-content">
             <div id="browse-unconfigured" style="display:none">
                 <div class="empty-state">
@@ -284,20 +358,29 @@
                         <option value="-Height">Tallest First</option>
                     </select>
                     <button class="btn btn-secondary btn-sm" onclick="loadBrowse()">Refresh</button>
-                    <span id="browse-count" style="font-size:0.85rem;color:var(--text-secondary);margin-left:auto"></span>
+                    <span id="browse-count" style="font-size:12px;color:var(--text-tertiary);margin-left:auto"></span>
                 </div>
                 <div class="browse-grid" id="browse-grid"></div>
                 <div class="browse-pagination" id="browse-pagination"></div>
             </div>
         </div>
 
-        <!-- Tab 8: Stats -->
+        <!-- ==================== Stats ==================== -->
         <div id="tab-stats" class="tab-content">
             <div class="stat-grid" id="stats-summary"></div>
             <div class="card">
                 <div class="card-title">Per-Source Statistics</div>
                 <table>
-                    <thead><tr><th>Source</th><th>Category</th><th>Uploaded</th><th>Dupes</th><th>Errors</th><th>Last Scraped</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th>Category</th>
+                            <th>Uploaded</th>
+                            <th>Dupes</th>
+                            <th>Errors</th>
+                            <th>Last Scraped</th>
+                        </tr>
+                    </thead>
                     <tbody id="stats-sources"></tbody>
                 </table>
             </div>
@@ -308,7 +391,7 @@
         </div>
     </div>
 
-    <!-- Modal -->
+    <!-- Modal overlay -->
     <div class="modal-overlay" id="modal-overlay">
         <div class="modal" id="modal-content"></div>
     </div>

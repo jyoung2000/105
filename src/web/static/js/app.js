@@ -124,7 +124,7 @@ async function loadActivityFeed() {
         }
         feed.innerHTML = data.entries.map(e => `
             <div class="activity-item" onclick="showEntryDetail('${e.id}')">
-                <img class="activity-thumb" src="/${e.thumbnail_path || ''}" alt="" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2250%22 height=%2250%22><rect fill=%22%231e2a4a%22 width=%2250%22 height=%2250%22/></svg>'">
+                <img class="activity-thumb" src="/${e.thumbnail_path || ''}" alt="" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2250%22 height=%2250%22><rect fill=%22%231c1c1e%22 width=%2250%22 height=%2250%22/></svg>'">
                 <div class="activity-info">
                     <div class="activity-title">${esc(e.title || 'Untitled')}</div>
                     <div class="activity-meta">
@@ -182,7 +182,7 @@ function renderGalleryGrid(entries, append) {
     const html = entries.map(e => `
         <div class="gallery-item" onclick="showEntryDetail('${e.id}')">
             <img src="/${e.thumbnail_path || ''}" alt="${esc(e.alt_text || '')}" loading="lazy"
-                onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231e2a4a%22 width=%22200%22 height=%22200%22/></svg>'">
+                onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231c1c1e%22 width=%22200%22 height=%22200%22/></svg>'">
             <div class="gallery-badge">${e.width}x${e.height}</div>
             <div class="gallery-overlay">
                 <div class="gallery-overlay-title">${esc(e.title || 'Untitled')}</div>
@@ -201,21 +201,21 @@ async function showEntryDetail(id) {
                 <h3>${esc(e.title || 'Untitled')}</h3>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
-            <div style="text-align:center;margin-bottom:1rem">
-                <img src="/${e.thumbnail_path || ''}" style="max-width:100%;border-radius:6px" alt="">
+            <div style="text-align:center;margin-bottom:1.5rem">
+                <img src="/${e.thumbnail_path || ''}" style="max-width:100%;border-radius:var(--radius-md)" alt="">
             </div>
             <table>
-                <tr><td style="color:var(--text-secondary)">Alt Text</td><td>${esc(e.alt_text || '')}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Tags</td><td>${esc(e.tags || '')}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Resolution</td><td>${e.width}x${e.height} (${e.aspect_ratio})</td></tr>
-                <tr><td style="color:var(--text-secondary)">Mobile</td><td>${e.is_mobile ? 'Yes' : 'No'}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Source</td><td>${esc(e.source_name || '')}</td></tr>
-                <tr><td style="color:var(--text-secondary)">File Size</td><td>${e.file_size_kb || 0} KB</td></tr>
-                <tr><td style="color:var(--text-secondary)">Hash</td><td style="font-family:monospace;font-size:0.8rem">${esc(e.img_hash || '')}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Status</td><td><span class="badge badge-${e.status}">${e.status}</span></td></tr>
-                <tr><td style="color:var(--text-secondary)">Baserow Row</td><td>${e.baserow_row_id || 'N/A'}</td></tr>
-                <tr><td style="color:var(--text-secondary)">URL</td><td><a href="${esc(e.img_url || '')}" target="_blank" style="color:var(--accent)">${esc((e.img_url||'').substring(0,60))}...</a></td></tr>
-                <tr><td style="color:var(--text-secondary)">Time</td><td>${e.timestamp || ''}</td></tr>
+                <tr><td style="color:var(--text-tertiary);width:120px">Alt Text</td><td>${esc(e.alt_text || '')}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Tags</td><td>${esc(e.tags || '')}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Resolution</td><td>${e.width}x${e.height} (${e.aspect_ratio})</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Mobile</td><td>${e.is_mobile ? 'Yes' : 'No'}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Source</td><td>${esc(e.source_name || '')}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">File Size</td><td>${e.file_size_kb || 0} KB</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Hash</td><td style="font-family:'SF Mono',SFMono-Regular,Menlo,monospace;font-size:12px">${esc(e.img_hash || '')}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Status</td><td><span class="badge badge-${e.status}">${e.status}</span></td></tr>
+                <tr><td style="color:var(--text-tertiary)">Baserow Row</td><td>${e.baserow_row_id || 'N/A'}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">URL</td><td><a href="${esc(e.img_url || '')}" target="_blank" style="color:var(--accent)">${esc((e.img_url||'').substring(0,60))}...</a></td></tr>
+                <tr><td style="color:var(--text-tertiary)">Time</td><td>${e.timestamp || ''}</td></tr>
                 ${e.error_message ? `<tr><td style="color:var(--error)">Error</td><td>${esc(e.error_message)}</td></tr>` : ''}
             </table>
         `);
@@ -277,18 +277,18 @@ async function loadScrapeJobs() {
         const data = await api('/api/jobs');
         const el = document.getElementById('scrape-jobs');
         const jobs = [data.current, ...(data.history || [])].filter(Boolean).slice(0, 10);
-        if (jobs.length === 0) { el.innerHTML = '<div style="color:var(--text-muted)">No recent jobs</div>'; return; }
+        if (jobs.length === 0) { el.innerHTML = '<div style="color:var(--text-tertiary);padding:1rem 0">No recent jobs</div>'; return; }
         el.innerHTML = jobs.map(j => `
-            <div class="card" style="padding:0.8rem">
+            <div class="card" style="padding:1rem">
                 <div style="display:flex;justify-content:space-between;align-items:center">
-                    <div>
-                        <strong>${esc(j.source_name || j.url || '')}</strong>
+                    <div style="display:flex;align-items:center;gap:0.5rem">
+                        <strong style="font-size:13px">${esc(j.source_name || j.url || '')}</strong>
                         <span class="badge badge-${j.status === 'running' ? 'running' : j.status === 'completed' ? 'success' : 'error'}">${j.status}</span>
                     </div>
-                    <span style="font-size:0.8rem;color:var(--text-muted)">${timeAgo(j.started_at)}</span>
+                    <span style="font-size:12px;color:var(--text-tertiary)">${timeAgo(j.started_at)}</span>
                 </div>
-                ${j.status === 'running' ? `<div class="progress" style="margin-top:0.5rem"><div class="progress-bar" style="width:${j.progress||0}%"></div></div>` : ''}
-                <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.3rem">
+                ${j.status === 'running' ? `<div class="progress" style="margin-top:0.75rem"><div class="progress-bar" style="width:${j.progress||0}%"></div></div>` : ''}
+                <div style="font-size:12px;color:var(--text-tertiary);margin-top:0.5rem">
                     Pages: ${j.pages_scraped || 0} | Found: ${j.images_found || 0} | Uploaded: ${j.images_uploaded || 0} | Dupes: ${j.duplicates || 0} | Errors: ${j.errors || 0}
                 </div>
             </div>
@@ -309,7 +309,7 @@ async function loadSources() {
             <tr>
                 <td><label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSource('${s.id}')"><span class="toggle-slider"></span></label></td>
                 <td><span class="badge badge-idle" id="source-status-${s.id}">idle</span></td>
-                <td>${esc(s.name)}<br><span style="font-size:0.7rem;color:var(--text-muted)">${esc(s.domain || '')}</span></td>
+                <td>${esc(s.name)}<br><span style="font-size:11px;color:var(--text-muted)">${esc(s.domain || '')}</span></td>
                 <td><span class="badge badge-${s.category}">${s.category}</span></td>
                 <td>${s.schedule_hours}h</td>
                 <td>${timeAgo(s.last_scraped)}</td>
@@ -349,10 +349,22 @@ async function deleteSource(id) {
 
 function showAddSourceModal() {
     showModal(`
-        <div class="modal-header"><h3>Add Source</h3><button class="modal-close" onclick="closeModal()">&times;</button></div>
-        <div class="form-group"><label>URL</label><input type="text" id="add-source-url" placeholder="https://..."></div>
-        <div class="form-group"><label>Name</label><input type="text" id="add-source-name" placeholder="Source name"></div>
-        <div class="form-group"><label>Schedule (hours)</label><input type="number" id="add-source-schedule" value="12"></div>
+        <div class="modal-header">
+            <h3>Add Source</h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="form-group">
+            <label>URL</label>
+            <input type="text" id="add-source-url" placeholder="https://...">
+        </div>
+        <div class="form-group">
+            <label>Name</label>
+            <input type="text" id="add-source-name" placeholder="Source name">
+        </div>
+        <div class="form-group">
+            <label>Schedule (hours)</label>
+            <input type="number" id="add-source-schedule" value="12">
+        </div>
         <button class="btn btn-primary" onclick="addSource()">Add Source</button>
     `);
 }
@@ -562,19 +574,19 @@ async function loadJobs() {
             return;
         }
         el.innerHTML = filtered.map(j => `
-            <div class="card" style="padding:0.8rem;margin-bottom:0.5rem">
+            <div class="card" style="padding:1rem">
                 <div style="display:flex;justify-content:space-between;align-items:center">
-                    <div>
-                        <strong>${esc(j.source_name || j.url || 'Unknown')}</strong>
+                    <div style="display:flex;align-items:center;gap:0.5rem">
+                        <strong style="font-size:13px">${esc(j.source_name || j.url || 'Unknown')}</strong>
                         <span class="badge badge-${j.status === 'running' ? 'running' : j.status === 'completed' ? 'success' : 'error'}">${j.status}</span>
                     </div>
-                    <span style="font-size:0.8rem;color:var(--text-muted)">${timeAgo(j.started_at)} ${j.completed_at ? '- ' + timeAgo(j.completed_at) : ''}</span>
+                    <span style="font-size:12px;color:var(--text-tertiary)">${timeAgo(j.started_at)} ${j.completed_at ? '- ' + timeAgo(j.completed_at) : ''}</span>
                 </div>
-                ${j.status === 'running' ? `<div class="progress" style="margin-top:0.5rem"><div class="progress-bar" style="width:${j.progress||0}%"></div></div>` : ''}
-                <div style="font-size:0.8rem;color:var(--text-secondary);margin-top:0.3rem">
+                ${j.status === 'running' ? `<div class="progress" style="margin-top:0.75rem"><div class="progress-bar" style="width:${j.progress||0}%"></div></div>` : ''}
+                <div style="font-size:12px;color:var(--text-tertiary);margin-top:0.5rem">
                     Pages: ${j.pages_scraped || 0}/${j.max_pages || '?'} | Found: ${j.images_found || 0} | Downloaded: ${j.images_downloaded || 0} | Uploaded: ${j.images_uploaded || 0} | Dupes: ${j.duplicates || 0} | Errors: ${j.errors || 0}
                 </div>
-                ${(j.error_log && j.error_log.length > 0) ? `<div style="font-size:0.75rem;color:var(--error);margin-top:0.3rem;max-height:80px;overflow-y:auto">${j.error_log.map(e => esc(e)).join('<br>')}</div>` : ''}
+                ${(j.error_log && j.error_log.length > 0) ? `<div style="font-size:11px;color:var(--error);margin-top:0.5rem;max-height:80px;overflow-y:auto;line-height:1.5">${j.error_log.map(e => esc(e)).join('<br>')}</div>` : ''}
             </div>
         `).join('');
     } catch (e) {}
@@ -886,7 +898,7 @@ function renderBrowseGrid(rows) {
         return `
             <div class="browse-item" onclick="showBrowseDetail(${rowId})">
                 <img src="${esc(thumb)}" alt="${esc(title)}" loading="lazy"
-                    onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22120%22><rect fill=%22%231e2a4a%22 width=%22200%22 height=%22120%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23556%22 font-size=%2214%22 text-anchor=%22middle%22 dy=%22.3em%22>No Image</text></svg>'">
+                    onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22120%22><rect fill=%22%231c1c1e%22 width=%22200%22 height=%22120%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23444%22 font-size=%2213%22 font-family=%22system-ui%22 text-anchor=%22middle%22 dy=%22.3em%22>No Image</text></svg>'">
                 <div class="browse-badge">${width}x${height}${isMobile ? ' M' : ''}</div>
                 <div class="browse-overlay">
                     <div class="browse-overlay-title">${esc(title)}</div>
@@ -967,23 +979,23 @@ async function showBrowseDetail(rowId) {
                 <h3>${esc(title)}</h3>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
-            <div style="text-align:center;margin-bottom:1rem">
+            <div style="text-align:center;margin-bottom:1.5rem">
                 <a href="${esc(fullImgUrl)}" target="_blank">
-                    <img src="${esc(fullImgUrl)}" style="max-width:100%;max-height:60vh;border-radius:6px;cursor:zoom-in" alt="${esc(altText)}">
+                    <img src="${esc(fullImgUrl)}" style="max-width:100%;max-height:60vh;border-radius:var(--radius-md);cursor:zoom-in" alt="${esc(altText)}">
                 </a>
             </div>
             <table>
-                <tr><td style="color:var(--text-secondary)">Title</td><td>${esc(title)}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Alt Text</td><td>${esc(altText)}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Tags</td><td>${esc(tags)}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Resolution</td><td>${width}x${height}</td></tr>
-                <tr><td style="color:var(--text-secondary)">Mobile</td><td>${isMobile ? 'Yes' : 'No'}</td></tr>
-                ${artist ? `<tr><td style="color:var(--text-secondary)">Artist</td><td>${artistLink ? `<a href="${esc(artistLink)}" target="_blank" style="color:var(--accent)">${esc(artist)}</a>` : esc(artist)}</td></tr>` : ''}
-                <tr><td style="color:var(--text-secondary)">Hash</td><td style="font-family:monospace;font-size:0.8rem">${esc(imgHash)}</td></tr>
-                ${imgUrl ? `<tr><td style="color:var(--text-secondary)">Source URL</td><td><a href="${esc(imgUrl)}" target="_blank" style="color:var(--accent)">${esc(imgUrl.substring(0, 60))}...</a></td></tr>` : ''}
-                <tr><td style="color:var(--text-secondary)">Baserow Row</td><td>#${rowId}</td></tr>
+                <tr><td style="color:var(--text-tertiary);width:120px">Title</td><td>${esc(title)}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Alt Text</td><td>${esc(altText)}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Tags</td><td>${esc(tags)}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Resolution</td><td>${width}x${height}</td></tr>
+                <tr><td style="color:var(--text-tertiary)">Mobile</td><td>${isMobile ? 'Yes' : 'No'}</td></tr>
+                ${artist ? `<tr><td style="color:var(--text-tertiary)">Artist</td><td>${artistLink ? `<a href="${esc(artistLink)}" target="_blank" style="color:var(--accent)">${esc(artist)}</a>` : esc(artist)}</td></tr>` : ''}
+                <tr><td style="color:var(--text-tertiary)">Hash</td><td style="font-family:'SF Mono',SFMono-Regular,Menlo,monospace;font-size:12px">${esc(imgHash)}</td></tr>
+                ${imgUrl ? `<tr><td style="color:var(--text-tertiary)">Source URL</td><td><a href="${esc(imgUrl)}" target="_blank" style="color:var(--accent)">${esc(imgUrl.substring(0, 60))}...</a></td></tr>` : ''}
+                <tr><td style="color:var(--text-tertiary)">Baserow Row</td><td>#${rowId}</td></tr>
             </table>
-            <div style="margin-top:1rem;text-align:center">
+            <div style="margin-top:1.5rem;text-align:center">
                 <a href="${esc(fullImgUrl)}" download class="btn btn-primary btn-sm" target="_blank">Download Full Size</a>
             </div>
         `);
@@ -1027,11 +1039,23 @@ async function loadStats() {
 
         const disc = data.discovery || {};
         document.getElementById('stats-discovery').innerHTML = `
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem">
-                <div><strong>${disc.total_queries || 0}</strong><br><span style="color:var(--text-secondary);font-size:0.8rem">Total Queries</span></div>
-                <div><strong>${disc.builtin_queries || 0}</strong><br><span style="color:var(--text-secondary);font-size:0.8rem">Built-in</span></div>
-                <div><strong>${disc.user_queries || 0}</strong><br><span style="color:var(--text-secondary);font-size:0.8rem">User Queries</span></div>
-                <div><strong>${disc.total_sources_discovered || 0}</strong><br><span style="color:var(--text-secondary);font-size:0.8rem">Sources Discovered</span></div>
+            <div class="stat-grid" style="margin-bottom:0">
+                <div class="stat-card">
+                    <div class="stat-value" style="font-size:1.5rem">${disc.total_queries || 0}</div>
+                    <div class="stat-label">Total Queries</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="font-size:1.5rem">${disc.builtin_queries || 0}</div>
+                    <div class="stat-label">Built-in</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="font-size:1.5rem">${disc.user_queries || 0}</div>
+                    <div class="stat-label">User Queries</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="font-size:1.5rem">${disc.total_sources_discovered || 0}</div>
+                    <div class="stat-label">Sources Discovered</div>
+                </div>
             </div>
         `;
     } catch (e) {}
