@@ -2,7 +2,9 @@
 import asyncio
 import random
 from typing import Optional
-from urllib.parse import urlparse, parse_qs, quote_plus
+from urllib.parse import urlparse, parse_qs, quote_plus, unquote
+import httpx
+from bs4 import BeautifulSoup
 from src.utils.logging import setup_logging
 
 logger = setup_logging("browser")
@@ -149,199 +151,159 @@ class BrowserManager:
             await page.close()
 
     async def web_search(self, query: str) -> list[str]:
-        """Search the web using multiple engines with fallback.
+        """Search the web using httpx (not Playwright) for reliability.
 
-        Tries DuckDuckGo first, then Bing if DDG fails or is blocked.
+        Search engines block headless browsers but allow normal HTTP requests.
+        Tries DuckDuckGo HTML first, then Bing as fallback.
         """
-        # Try DuckDuckGo first
-        urls = await self._search_duckduckgo(query)
+        headers = {
+            "User-Agent": self._current_ua or USER_AGENTS[0],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        }
+
+        # Try DuckDuckGo HTML version
+        urls = await self._search_ddg_http(query, headers)
         if urls:
             return urls
 
         # Fallback to Bing
         logger.info(f"DDG returned 0 results for '{query}', trying Bing")
-        urls = await self._search_bing(query)
+        urls = await self._search_bing_http(query, headers)
         if urls:
             return urls
 
         logger.warning(f"All search engines returned 0 results for '{query}'")
         return []
 
-    async def _search_duckduckgo(self, query: str) -> list[str]:
-        """Search DuckDuckGo and return result URLs."""
-        page = await self.get_page()
+    async def _search_ddg_http(self, query: str, headers: dict) -> list[str]:
+        """Search DuckDuckGo HTML version via httpx + BeautifulSoup."""
         urls = []
         try:
-            # Navigate to DuckDuckGo homepage — JS version is more reliable
-            # than html.duckduckgo.com which frequently blocks headless browsers
-            await page.goto("https://duckduckgo.com/", wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(jitter(2000))
+            async with httpx.AsyncClient(
+                headers=headers, follow_redirects=True, timeout=20
+            ) as client:
+                resp = await client.post(
+                    "https://html.duckduckgo.com/html/",
+                    data={"q": query, "b": ""},
+                )
 
-            # Type the query
-            search_input = await page.query_selector('input[name="q"]')
-            if not search_input:
-                # Try alternative selectors
-                search_input = await page.query_selector('textarea[name="q"]')
-            if not search_input:
-                search_input = await page.query_selector('[role="combobox"]')
+            if resp.status_code != 200:
+                logger.warning(f"DDG HTTP returned status {resp.status_code}")
+                return []
 
-            if search_input:
-                await search_input.click()
-                await page.wait_for_timeout(jitter(300))
-                for char in query:
-                    await search_input.type(char, delay=random.randint(50, 150))
-                await page.wait_for_timeout(jitter(500))
-                await page.keyboard.press("Enter")
-            else:
-                logger.warning("DDG search input not found, using direct URL")
-                search_url = f"https://duckduckgo.com/?q={quote_plus(query)}"
-                await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            soup = BeautifulSoup(resp.text, "lxml")
 
-            # Wait longer for JS-rendered results
-            await page.wait_for_timeout(jitter(5000))
+            # DDG HTML results: <a class="result__a" href="//duckduckgo.com/l/?uddg=...">
+            result_links = soup.select("a.result__a")
+            if not result_links:
+                # Fallback: any link in the results area
+                result_links = soup.select(".result__body a[href]")
+            if not result_links:
+                result_links = soup.select("a.result-link")
 
-            # Extract result URLs from the page
-            urls = await self._extract_search_results(page, "ddg")
+            skip_domains = {
+                "duckduckgo.com", "duck.co", "spreadprivacy.com",
+                "google.com", "facebook.com", "twitter.com", "x.com",
+                "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
+                "reddit.com", "wikipedia.org", "amazon.com",
+            }
 
-            logger.info(f"DDG search '{query}': {len(urls)} URLs")
-
-            if len(urls) == 0:
-                try:
-                    page_text = await page.inner_text("body")
-                    text_len = len(page_text.strip())
-                    if "captcha" in page_text.lower() or "unusual traffic" in page_text.lower():
-                        logger.warning("DDG may be blocking: captcha/unusual traffic detected")
-                    elif text_len < 200:
-                        logger.warning(f"DDG returned very short page ({text_len} chars), possible block")
-                except Exception:
-                    pass
-
-        except Exception as e:
-            logger.warning(f"DuckDuckGo search failed for '{query}': {e}")
-        finally:
-            await page.close()
-        return urls
-
-    async def _search_bing(self, query: str) -> list[str]:
-        """Search Bing and return result URLs."""
-        page = await self.get_page()
-        urls = []
-        try:
-            search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
-            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(jitter(3000))
-
-            # Bing result selectors (stable across layouts)
-            selectors = [
-                ("li.b_algo h2 a[href]", "bing-algo"),
-                (".b_algo a[href^='http']", "bing-algo-link"),
-                ("h2 a[href^='http']", "bing-h2"),
-                ("cite", "bing-cite"),
-            ]
-
-            links = []
-            matched_selector = "none"
-            for selector, name in selectors:
-                links = await page.query_selector_all(selector)
-                if links:
-                    matched_selector = name
-                    break
-
-            if not links:
-                links = await page.query_selector_all("a[href^='http']")
-                matched_selector = "bing-all-links"
-
-            skip_domains = {"bing.com", "microsoft.com", "msn.com", "live.com",
-                            "microsoftonline.com", "office.com",
-                            "google.com", "facebook.com", "twitter.com", "x.com",
-                            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
-                            "reddit.com", "wikipedia.org", "amazon.com"}
-
-            for link in links[:30]:
-                href = await link.get_attribute("href")
-                if href and href.startswith("http"):
-                    try:
-                        domain = urlparse(href).netloc.lower()
-                        if not any(skip in domain for skip in skip_domains):
-                            if href not in urls:
-                                urls.append(href)
-                    except Exception:
-                        pass
-                if len(urls) >= 15:
-                    break
-
-            logger.info(f"Bing search '{query}': {len(urls)} URLs via '{matched_selector}'")
-
-            if len(urls) == 0:
-                try:
-                    page_text = await page.inner_text("body")
-                    if len(page_text.strip()) < 200:
-                        logger.warning(f"Bing returned very short page ({len(page_text)} chars)")
-                except Exception:
-                    pass
-
-        except Exception as e:
-            logger.warning(f"Bing search failed for '{query}': {e}")
-        finally:
-            await page.close()
-        return urls
-
-    async def _extract_search_results(self, page, engine: str) -> list[str]:
-        """Extract search result URLs from a search results page."""
-        urls = []
-
-        # Try multiple selector strategies
-        selectors = [
-            ("a[data-testid='result-title-a']", "modern"),
-            ("article a[href^='http']", "article"),
-            ("#links a.result__a", "classic"),
-            ("ol.react-results--main a[href]", "react"),
-            ("a[rel='noopener'][href^='http']", "noopener"),
-            ("h2 a[href^='http']", "h2-links"),
-            ("a.result__a", "html-result"),
-        ]
-
-        links = []
-        matched_selector = "none"
-        for selector, name in selectors:
-            links = await page.query_selector_all(selector)
-            if links:
-                matched_selector = name
-                break
-
-        if not links:
-            links = await page.query_selector_all("a[href^='http']")
-            matched_selector = "all-links-fallback"
-
-        skip_domains = {"duckduckgo.com", "html.duckduckgo.com", "duck.co",
-                        "spreadprivacy.com",
-                        "google.com", "facebook.com", "twitter.com", "x.com",
-                        "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
-                        "reddit.com", "wikipedia.org", "amazon.com"}
-
-        for link in links[:30]:
-            href = await link.get_attribute("href")
-            if href and href.startswith("http"):
-                try:
+            for link in result_links[:30]:
+                href = link.get("href", "")
+                # DDG wraps URLs: //duckduckgo.com/l/?uddg=ENCODED_URL&rut=...
+                if "duckduckgo.com" in href and "uddg=" in href:
                     parsed = urlparse(href)
-                    domain = parsed.netloc.lower()
-                    # DDG wraps URLs in redirect links
-                    if "duckduckgo.com" in domain:
-                        params = parse_qs(parsed.query)
-                        if "uddg" in params:
-                            href = params["uddg"][0]
-                            domain = urlparse(href).netloc.lower()
-                        else:
-                            continue
+                    params = parse_qs(parsed.query)
+                    if "uddg" in params:
+                        href = unquote(params["uddg"][0])
+                elif href.startswith("//"):
+                    href = "https:" + href
+                elif not href.startswith("http"):
+                    continue
+
+                try:
+                    domain = urlparse(href).netloc.lower()
                     if not any(skip in domain for skip in skip_domains):
                         if href not in urls:
                             urls.append(href)
                 except Exception:
                     pass
-            if len(urls) >= 15:
-                break
 
-        logger.debug(f"{engine} extracted {len(urls)} URLs via '{matched_selector}'")
+                if len(urls) >= 15:
+                    break
+
+            logger.info(f"DDG HTTP search '{query}': {len(urls)} URLs from {len(result_links)} links")
+
+            if len(urls) == 0 and len(resp.text) < 500:
+                logger.warning(f"DDG returned very short page ({len(resp.text)} chars), possible block")
+
+        except Exception as e:
+            logger.warning(f"DDG HTTP search failed for '{query}': {e}")
+        return urls
+
+    async def _search_bing_http(self, query: str, headers: dict) -> list[str]:
+        """Search Bing via httpx + BeautifulSoup."""
+        urls = []
+        try:
+            search_url = f"https://www.bing.com/search?q={quote_plus(query)}&setlang=en"
+            async with httpx.AsyncClient(
+                headers=headers, follow_redirects=True, timeout=20
+            ) as client:
+                resp = await client.get(search_url)
+
+            if resp.status_code != 200:
+                logger.warning(f"Bing HTTP returned status {resp.status_code}")
+                return []
+
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            # Bing organic results: <li class="b_algo"><h2><a href="...">
+            result_links = []
+            for li in soup.select("li.b_algo"):
+                a_tag = li.select_one("h2 a[href]")
+                if a_tag:
+                    result_links.append(a_tag)
+
+            if not result_links:
+                # Broader fallback
+                result_links = soup.select("h2 a[href^='http']")
+
+            skip_domains = {
+                "bing.com", "microsoft.com", "msn.com", "live.com",
+                "microsoftonline.com", "office.com",
+                "google.com", "facebook.com", "twitter.com", "x.com",
+                "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
+                "reddit.com", "wikipedia.org", "amazon.com",
+            }
+
+            for link in result_links[:30]:
+                href = link.get("href", "")
+                if not href.startswith("http"):
+                    continue
+
+                try:
+                    domain = urlparse(href).netloc.lower()
+                    if not any(skip in domain for skip in skip_domains):
+                        if href not in urls:
+                            urls.append(href)
+                except Exception:
+                    pass
+
+                if len(urls) >= 15:
+                    break
+
+            logger.info(f"Bing HTTP search '{query}': {len(urls)} URLs from {len(result_links)} results")
+
+            if len(urls) == 0 and len(resp.text) < 500:
+                logger.warning(f"Bing returned very short page ({len(resp.text)} chars)")
+
+        except Exception as e:
+            logger.warning(f"Bing HTTP search failed for '{query}': {e}")
         return urls
 
     # Keep old name for backward compatibility
