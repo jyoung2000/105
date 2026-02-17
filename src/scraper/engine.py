@@ -31,6 +31,11 @@ logger = setup_logging("engine")
 TEMP_DIR = data_path("temp")
 
 
+class _CancelledError(Exception):
+    """Raised internally when a cancellation check fires mid-operation."""
+    pass
+
+
 class ScrapeResult:
     """Result of a single image scrape."""
     def __init__(self):
@@ -164,6 +169,23 @@ class ScraperEngine:
             return True
         return False
 
+    def _check_cancel(self):
+        """Check if cancellation has been requested. Call this before/after
+        each long-running operation so cancellation is responsive."""
+        if self._cancel_requested:
+            raise _CancelledError()
+
+    async def _cancellable_sleep(self, seconds: float):
+        """Sleep that checks for cancellation every 0.5s instead of blocking."""
+        elapsed = 0.0
+        interval = 0.5
+        while elapsed < seconds:
+            if self._cancel_requested:
+                raise _CancelledError()
+            chunk = min(interval, seconds - elapsed)
+            await asyncio.sleep(chunk)
+            elapsed += chunk
+
     async def scrape_url(self, url: str, source_id: str = "", source_name: str = "", max_pages: int = 10) -> ScrapeJob:
         """Scrape a URL and process all found wallpapers."""
         job_id = uuid.uuid4().hex[:12]
@@ -181,6 +203,8 @@ class ScraperEngine:
 
         try:
             await self._run_pipeline(job)
+        except _CancelledError:
+            logger.info(f"Job {job.id} cancelled")
         except Exception as e:
             logger.error(f"Pipeline error for {url}: {e}")
             job.error_log.append(str(e))
@@ -248,7 +272,7 @@ class ScraperEngine:
                     logger.warning("Site is blocking gallery pages — stopping")
                     break
                 # Wait longer before trying next page
-                await asyncio.sleep(5 + random.random() * 5)
+                await self._cancellable_sleep(5 + random.random() * 5)
                 # Try to continue to next page anyway
                 try:
                     next_url = await adapter.get_next_page_url(html, current_url, page_num)
@@ -356,6 +380,9 @@ class ScraperEngine:
                             job.errors += 1
                             if result.error:
                                 logger.debug(f"Image skip: {result.error} - {img.url[:80]}")
+                    except _CancelledError:
+                        logger.info("Cancellation caught in image loop — stopping")
+                        break
                     except Exception as e:
                         logger.error(f"Image processing error: {e}")
                         job.errors += 1
@@ -382,7 +409,7 @@ class ScraperEngine:
                 break
 
             # Human-like delay between gallery pages (4-7s)
-            await asyncio.sleep(4 + random.random() * 3)
+            await self._cancellable_sleep(4 + random.random() * 3)
 
         # Release the persistent browser page for this site
         await browser_manager.release_site_page()
@@ -468,7 +495,7 @@ class ScraperEngine:
                         break
                     backoff = base_delay * (2 ** consecutive_failures) + random.random() * 3
                     logger.info(f"Backing off {backoff:.1f}s before next detail page")
-                    await asyncio.sleep(backoff)
+                    await self._cancellable_sleep(backoff)
                     continue
 
                 # NSFW page check — skip entire page if NSFW and not allowed
@@ -522,6 +549,9 @@ class ScraperEngine:
                                 job.errors += 1
                                 if result.error:
                                     logger.debug(f"Image skip: {result.error} - {img.url[:80]}")
+                        except _CancelledError:
+                            logger.info("Cancellation caught in detail page image loop — stopping")
+                            raise  # Propagate to break out of the detail page loop
                         except Exception as e:
                             logger.error(f"Image processing error: {e}")
                             job.errors += 1
@@ -544,6 +574,9 @@ class ScraperEngine:
                             f"with no images (adapter may not match this site's layout)"
                         )
                         break
+            except _CancelledError:
+                logger.info("Cancellation caught in detail page loop — stopping")
+                break
             except Exception as e:
                 consecutive_failures += 1
                 logger.warning(f"Failed to scrape detail page {detail_url}: {e}")
@@ -553,26 +586,34 @@ class ScraperEngine:
             delay = base_delay + random.random() * 2
             if consecutive_failures > 0:
                 delay += consecutive_failures * 1.5  # Extra 1.5s per consecutive failure
-            await asyncio.sleep(delay)
+            await self._cancellable_sleep(delay)
 
         # Batch save visited pages
         if profile:
             profile.save()
 
     async def _process_image(self, img, job: ScrapeJob, validator: ImageValidator = None) -> ScrapeResult:
-        """Process a single image through the full pipeline."""
+        """Process a single image through the full pipeline.
+
+        Checks self._cancel_requested before each long-running operation
+        so that cancellation is responsive (instead of waiting for the entire
+        image pipeline to finish).
+        """
         result = ScrapeResult()
         temp_files = []
         if validator is None:
             validator = self._get_validator()
 
         try:
+            self._check_cancel()
+
             # Try upgraded URLs first (e.g., /wallpaper/nbig/ -> /wallpaper/original/)
             # This ensures we get full-resolution images instead of previews/thumbnails
             dl_path = None
             used_url = img.url
             upgraded_urls = GenericAdapter.get_upgraded_urls(img.url)
             for upgraded_url in upgraded_urls:
+                self._check_cancel()
                 logger.info(f"Trying full-res URL: {upgraded_url[:100]}")
                 dl_path = await self.downloader.download(upgraded_url, referer=img.page_url)
                 if dl_path is not None:
@@ -582,6 +623,7 @@ class ScraperEngine:
 
             # Fall back to original URL if no upgrade worked
             if dl_path is None:
+                self._check_cancel()
                 logger.info(f"Downloading: {img.url[:100]}")
                 dl_path = await self.downloader.download(img.url, referer=img.page_url)
 
@@ -591,6 +633,8 @@ class ScraperEngine:
                 return result
             temp_files.append(dl_path)
             job.images_downloaded += 1
+
+            self._check_cancel()
 
             # Validate
             is_valid, reason = validator.validate(dl_path)
@@ -627,6 +671,8 @@ class ScraperEngine:
             # Generate thumbnail
             thumb_path = self.compressor.generate_thumbnail(compressed_path, img_hash)
 
+            self._check_cancel()
+
             # Dedup check
             if self.baserow.is_configured:
                 is_dupe = await self.baserow.check_duplicate(img_hash)
@@ -636,8 +682,12 @@ class ScraperEngine:
                                        thumb_path or "", None, "duplicate")
                     return result
 
+            self._check_cancel()
+
             # AI captioning
             title, alt_text, tags = await self.captioner.caption(compressed_path)
+
+            self._check_cancel()
 
             # Use scraped metadata as fallback, but clean it first
             # (HTML alt/title often contain site names, dimensions, junk)
@@ -668,11 +718,14 @@ class ScraperEngine:
                 aspect_ratio=aspect,
             )
 
+            self._check_cancel()
+
             # Upload to Baserow
             row_id = None
             if self.baserow.is_configured:
                 # Upload file first
                 file_obj = await self.baserow.upload_file(compressed_path)
+                self._check_cancel()
                 if file_obj:
                     metadata.imageFile = [{"name": file_obj.get("name", ""), "visible_name": file_obj.get("visible_name", "")}]
 
@@ -694,6 +747,10 @@ class ScraperEngine:
                                title=title, alt_text=alt_text, tags=tags, aspect=aspect, mobile=mobile)
 
             return result
+
+        except _CancelledError:
+            logger.info("Image processing cancelled mid-operation")
+            raise  # Propagate so the calling loop breaks
 
         except Exception as e:
             result.error = str(e)

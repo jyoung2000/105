@@ -762,6 +762,8 @@ tr:hover td { background: var(--bg-hover); }
 .badge-builtin   { background: rgba(255, 255, 255, 0.06); color: var(--text-tertiary); }
 .badge-success   { background: var(--success-subtle); color: var(--success); }
 .badge-error     { background: var(--error-subtle); color: var(--error); }
+.badge-warning   { background: var(--warning-subtle); color: var(--orange); }
+.badge-cancelled { background: var(--warning-subtle); color: var(--orange); }
 .badge-duplicate { background: var(--warning-subtle); color: var(--orange); }
 .badge-running   { background: var(--info-subtle); color: var(--info); }
 .badge-scraping  { background: var(--info-subtle); color: var(--info); animation: badge-pulse 1.5s ease-in-out infinite; }

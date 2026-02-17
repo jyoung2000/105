@@ -377,7 +377,7 @@ async function loadScrapeJobs() {
                 <div style="display:flex;justify-content:space-between;align-items:center">
                     <div style="display:flex;align-items:center;gap:0.5rem">
                         <strong style="font-size:13px">${esc(j.source_name || j.url || '')}</strong>
-                        <span class="badge badge-${j.status === 'running' ? 'running' : j.status === 'completed' ? 'success' : 'error'}">${j.status}</span>
+                        <span class="badge badge-${j.status === 'running' ? 'running' : j.status === 'completed' ? 'success' : j.status === 'cancelled' ? 'warning' : 'error'}">${j.status}</span>
                     </div>
                     <span style="font-size:12px;color:var(--text-tertiary)">${timeAgo(j.started_at)}</span>
                 </div>
@@ -670,6 +670,26 @@ async function cancelJob() {
         const data = await api('/api/jobs/cancel', { method: 'POST' });
         if (data.status === 'cancelling') {
             toast('Cancelling current job...', 'info');
+            // Immediately refresh all job-related views so the UI updates
+            loadScrapeJobs();
+            loadLiveStatus();
+            loadJobs();
+            // Poll rapidly until the job actually stops (up to 15s)
+            let checks = 0;
+            const pollCancel = setInterval(async () => {
+                checks++;
+                try {
+                    const jobs = await api('/api/jobs');
+                    const running = jobs.current && jobs.current.status === 'running';
+                    if (!running || checks >= 30) {
+                        clearInterval(pollCancel);
+                        loadScrapeJobs();
+                        loadLiveStatus();
+                        loadJobs();
+                        if (!running) toast('Job cancelled', 'success');
+                    }
+                } catch (_) { clearInterval(pollCancel); }
+            }, 500);
         } else {
             toast('No running job to cancel', 'info');
         }
@@ -778,7 +798,7 @@ async function loadJobs() {
                 <div style="display:flex;justify-content:space-between;align-items:center">
                     <div style="display:flex;align-items:center;gap:0.5rem">
                         <strong style="font-size:13px">${esc(j.source_name || j.url || 'Unknown')}</strong>
-                        <span class="badge badge-${j.status === 'running' ? 'running' : j.status === 'completed' ? 'success' : 'error'}">${j.status}</span>
+                        <span class="badge badge-${j.status === 'running' ? 'running' : j.status === 'completed' ? 'success' : j.status === 'cancelled' ? 'warning' : 'error'}">${j.status}</span>
                     </div>
                     <span style="font-size:12px;color:var(--text-tertiary)">${timeAgo(j.started_at)} ${j.completed_at ? '- ' + timeAgo(j.completed_at) : ''}</span>
                 </div>
