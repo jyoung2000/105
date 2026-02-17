@@ -181,7 +181,7 @@ class BrowserManager:
         """Search the web using httpx (not Playwright) for reliability.
 
         Search engines block headless browsers but allow normal HTTP requests.
-        Tries DuckDuckGo HTML first, then Bing as fallback.
+        Tries multiple search engines with fallback.
         """
         headers = {
             "User-Agent": self._current_ua or USER_AGENTS[0],
@@ -192,6 +192,11 @@ class BrowserManager:
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         }
+
+        # Try DuckDuckGo Lite (simplest HTML, hardest to block)
+        urls = await self._search_ddg_lite(query, headers)
+        if urls:
+            return urls
 
         # Try DuckDuckGo HTML version
         urls = await self._search_ddg_http(query, headers)
@@ -204,8 +209,56 @@ class BrowserManager:
         if urls:
             return urls
 
+        # Try Google as last resort
+        urls = await self._search_google_http(query, headers)
+        if urls:
+            return urls
+
         logger.warning(f"All search engines returned 0 results for '{query}'")
         return []
+
+    async def _search_ddg_lite(self, query: str, headers: dict) -> list[str]:
+        """Search DuckDuckGo Lite — minimal HTML, most resilient."""
+        urls = []
+        try:
+            async with httpx.AsyncClient(
+                headers=headers, follow_redirects=True, timeout=20
+            ) as client:
+                resp = await client.post(
+                    "https://lite.duckduckgo.com/lite/",
+                    data={"q": query},
+                )
+
+            if resp.status_code != 200:
+                logger.warning(f"DDG Lite returned status {resp.status_code}")
+                return []
+
+            soup = BeautifulSoup(resp.text, "lxml")
+            title = soup.find("title")
+            title_text = title.get_text(strip=True) if title else ""
+            logger.debug(f"DDG Lite response: {len(resp.text)} chars, title='{title_text[:80]}'")
+
+            # DDG Lite uses simple table layout with result links
+            result_links = soup.select("a.result-link")
+            if not result_links:
+                # Also try result__a (shared with HTML version)
+                result_links = soup.select("a.result__a")
+            if not result_links:
+                # Generic: links inside result table rows
+                result_links = []
+                for td in soup.select("td"):
+                    a_tag = td.find("a", href=True)
+                    if a_tag:
+                        href = a_tag.get("href", "")
+                        if href.startswith("http") and "duckduckgo" not in href:
+                            result_links.append(a_tag)
+
+            urls = self._filter_search_urls(result_links, ddg=True)
+            logger.info(f"DDG Lite search '{query}': {len(urls)} URLs from {len(result_links)} links")
+
+        except Exception as e:
+            logger.warning(f"DDG Lite search failed for '{query}': {e}")
+        return urls
 
     async def _search_ddg_http(self, query: str, headers: dict) -> list[str]:
         """Search DuckDuckGo HTML version via httpx + BeautifulSoup."""
@@ -220,64 +273,42 @@ class BrowserManager:
                 )
 
             if resp.status_code != 200:
-                logger.warning(f"DDG HTTP returned status {resp.status_code}")
+                logger.warning(f"DDG HTML returned status {resp.status_code}")
                 return []
 
             soup = BeautifulSoup(resp.text, "lxml")
+            title = soup.find("title")
+            title_text = title.get_text(strip=True) if title else ""
+            logger.debug(f"DDG HTML response: {len(resp.text)} chars, title='{title_text[:80]}'")
 
             # DDG HTML results: <a class="result__a" href="//duckduckgo.com/l/?uddg=...">
             result_links = soup.select("a.result__a")
             if not result_links:
-                # Fallback: any link in the results area
                 result_links = soup.select(".result__body a[href]")
             if not result_links:
                 result_links = soup.select("a.result-link")
 
-            skip_domains = {
-                "duckduckgo.com", "duck.co", "spreadprivacy.com",
-                "google.com", "facebook.com", "twitter.com", "x.com",
-                "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
-                "reddit.com", "wikipedia.org", "amazon.com",
-            }
+            urls = self._filter_search_urls(result_links, ddg=True)
+            logger.info(f"DDG HTML search '{query}': {len(urls)} URLs from {len(result_links)} links")
 
-            for link in result_links[:30]:
-                href = link.get("href", "")
-                # DDG wraps URLs: //duckduckgo.com/l/?uddg=ENCODED_URL&rut=...
-                if "duckduckgo.com" in href and "uddg=" in href:
-                    parsed = urlparse(href)
-                    params = parse_qs(parsed.query)
-                    if "uddg" in params:
-                        href = unquote(params["uddg"][0])
-                elif href.startswith("//"):
-                    href = "https:" + href
-                elif not href.startswith("http"):
-                    continue
-
-                try:
-                    domain = urlparse(href).netloc.lower()
-                    if not any(skip in domain for skip in skip_domains):
-                        if href not in urls:
-                            urls.append(href)
-                except Exception:
-                    pass
-
-                if len(urls) >= 15:
-                    break
-
-            logger.info(f"DDG HTTP search '{query}': {len(urls)} URLs from {len(result_links)} links")
-
-            if len(urls) == 0 and len(resp.text) < 500:
-                logger.warning(f"DDG returned very short page ({len(resp.text)} chars), possible block")
+            if len(urls) == 0:
+                # Log diagnostics
+                all_links = soup.find_all("a", href=True)
+                forms = soup.find_all("form")
+                logger.debug(
+                    f"DDG HTML diagnostics: total_links={len(all_links)}, "
+                    f"forms={len(forms)}, body_len={len(resp.text)}"
+                )
 
         except Exception as e:
-            logger.warning(f"DDG HTTP search failed for '{query}': {e}")
+            logger.warning(f"DDG HTML search failed for '{query}': {e}")
         return urls
 
     async def _search_bing_http(self, query: str, headers: dict) -> list[str]:
         """Search Bing via httpx + BeautifulSoup."""
         urls = []
         try:
-            search_url = f"https://www.bing.com/search?q={quote_plus(query)}&setlang=en"
+            search_url = f"https://www.bing.com/search?q={quote_plus(query)}&setlang=en&cc=us"
             async with httpx.AsyncClient(
                 headers=headers, follow_redirects=True, timeout=20
             ) as client:
@@ -288,6 +319,9 @@ class BrowserManager:
                 return []
 
             soup = BeautifulSoup(resp.text, "lxml")
+            title = soup.find("title")
+            title_text = title.get_text(strip=True) if title else ""
+            logger.debug(f"Bing response: {len(resp.text)} chars, title='{title_text[:80]}'")
 
             # Bing organic results: <li class="b_algo"><h2><a href="...">
             result_links = []
@@ -297,40 +331,122 @@ class BrowserManager:
                     result_links.append(a_tag)
 
             if not result_links:
-                # Broader fallback
+                # Broader fallback — any h2 link
                 result_links = soup.select("h2 a[href^='http']")
 
-            skip_domains = {
+            if not result_links:
+                # Even broader — look for <cite> URLs and nearby links
+                for cite in soup.select("cite"):
+                    parent = cite.parent
+                    if parent:
+                        a_tag = parent.find("a", href=True)
+                        if a_tag:
+                            result_links.append(a_tag)
+
+            bing_skip = {
                 "bing.com", "microsoft.com", "msn.com", "live.com",
                 "microsoftonline.com", "office.com",
-                "google.com", "facebook.com", "twitter.com", "x.com",
-                "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
-                "reddit.com", "wikipedia.org", "amazon.com",
             }
-
-            for link in result_links[:30]:
-                href = link.get("href", "")
-                if not href.startswith("http"):
-                    continue
-
-                try:
-                    domain = urlparse(href).netloc.lower()
-                    if not any(skip in domain for skip in skip_domains):
-                        if href not in urls:
-                            urls.append(href)
-                except Exception:
-                    pass
-
-                if len(urls) >= 15:
-                    break
-
+            urls = self._filter_search_urls(result_links, extra_skip=bing_skip)
             logger.info(f"Bing HTTP search '{query}': {len(urls)} URLs from {len(result_links)} results")
 
-            if len(urls) == 0 and len(resp.text) < 500:
-                logger.warning(f"Bing returned very short page ({len(resp.text)} chars)")
+            if len(urls) == 0:
+                all_links = soup.find_all("a", href=True)
+                logger.debug(f"Bing diagnostics: total_links={len(all_links)}, body_len={len(resp.text)}")
 
         except Exception as e:
             logger.warning(f"Bing HTTP search failed for '{query}': {e}")
+        return urls
+
+    async def _search_google_http(self, query: str, headers: dict) -> list[str]:
+        """Search Google as last resort via httpx + BeautifulSoup."""
+        urls = []
+        try:
+            search_url = f"https://www.google.com/search?q={quote_plus(query)}&hl=en"
+            google_headers = dict(headers)
+            google_headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+            async with httpx.AsyncClient(
+                headers=google_headers, follow_redirects=True, timeout=20
+            ) as client:
+                resp = await client.get(search_url)
+
+            if resp.status_code != 200:
+                logger.debug(f"Google returned status {resp.status_code}")
+                return []
+
+            soup = BeautifulSoup(resp.text, "lxml")
+
+            # Google wraps results in <div class="g"> or various containers
+            result_links = []
+            # Try multiple selector strategies
+            for selector in ["div.g a[href^='http']", "div.tF2Cxc a[href^='http']",
+                             "div[data-hveid] a[href^='http']", "h3 a[href^='http']"]:
+                result_links = soup.select(selector)
+                if result_links:
+                    break
+
+            if not result_links:
+                # Broad: any link starting with /url?q= (Google redirect)
+                for a_tag in soup.find_all("a", href=True):
+                    href = a_tag.get("href", "")
+                    if href.startswith("/url?q="):
+                        params = parse_qs(urlparse(href).query)
+                        if "q" in params:
+                            real_url = params["q"][0]
+                            if real_url.startswith("http"):
+                                a_tag["href"] = real_url  # Replace for filter
+                                result_links.append(a_tag)
+
+            google_skip = {"google.com", "googleapis.com", "gstatic.com", "google.co"}
+            urls = self._filter_search_urls(result_links, extra_skip=google_skip)
+            logger.info(f"Google HTTP search '{query}': {len(urls)} URLs")
+
+        except Exception as e:
+            logger.debug(f"Google search failed for '{query}': {e}")
+        return urls
+
+    def _filter_search_urls(self, links, ddg: bool = False, extra_skip: set = None) -> list[str]:
+        """Filter and deduplicate search result URLs."""
+        urls = []
+        skip_domains = {
+            "google.com", "facebook.com", "twitter.com", "x.com",
+            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
+            "reddit.com", "wikipedia.org", "amazon.com",
+        }
+        if extra_skip:
+            skip_domains |= extra_skip
+
+        for link in links[:30]:
+            href = link.get("href", "")
+
+            # DDG wraps URLs: //duckduckgo.com/l/?uddg=ENCODED_URL&rut=...
+            if ddg and "duckduckgo.com" in href and "uddg=" in href:
+                parsed = urlparse(href)
+                params = parse_qs(parsed.query)
+                if "uddg" in params:
+                    href = unquote(params["uddg"][0])
+            elif href.startswith("//"):
+                href = "https:" + href
+            elif not href.startswith("http"):
+                continue
+
+            try:
+                domain = urlparse(href).netloc.lower()
+                # Skip DDG internal links
+                if ddg and "duckduckgo.com" in domain:
+                    continue
+                if not any(skip in domain for skip in skip_domains):
+                    if href not in urls:
+                        urls.append(href)
+            except Exception:
+                pass
+
+            if len(urls) >= 15:
+                break
+
         return urls
 
     # Keep old name for backward compatibility

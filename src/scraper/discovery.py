@@ -20,6 +20,22 @@ BLOCKED_DOMAINS = {
 MIN_VALIDATION_SCORE = 1
 MAX_QUERIES_PER_RUN = 3
 
+# Known wallpaper sites — used as fallback when search engines return nothing
+KNOWN_WALLPAPER_SITES = [
+    {"url": "https://wallpaperscraft.com/all", "name": "WallpapersCraft"},
+    {"url": "https://www.pixel4k.com/latest.html", "name": "Pixel4K"},
+    {"url": "https://4kwallpapers.com/", "name": "4KWallpapers"},
+    {"url": "https://www.wallpapermania.eu/", "name": "WallpaperMania"},
+    {"url": "https://wallpaperbat.com/new-wallpapers", "name": "WallpaperBat"},
+    {"url": "https://free4kwallpapers.com/", "name": "Free4KWallpapers"},
+    {"url": "https://www.hdwallpapers.in/latest_wallpapers.html", "name": "HDWallpapers.in"},
+    {"url": "https://wallpaperaccess.com/latest", "name": "WallpaperAccess"},
+    {"url": "https://www.setaswall.com/", "name": "SetAsWall"},
+    {"url": "https://getwallpapers.com/", "name": "GetWallpapers"},
+    {"url": "https://www.uhdpaper.com/", "name": "UHDPaper"},
+    {"url": "https://www.wallpaperbetter.com/", "name": "WallpaperBetter"},
+]
+
 
 class DiscoveryEngine:
     """Discovers new wallpaper sources by searching the web."""
@@ -132,7 +148,52 @@ class DiscoveryEngine:
                 # Brief pause between queries
                 await asyncio.sleep(2 + random.random() * 2)
 
-            # Only stamp discovery as "run" if we actually evaluated URLs
+            # If search returned nothing, try known wallpaper sites as fallback
+            if total_new_sources == 0 and not results:
+                logger.info("Search engines returned no results, trying known wallpaper sites")
+                fallback_urls = self._get_fallback_sites()
+                for url, name in fallback_urls:
+                    try:
+                        domain = urlparse(url).netloc
+                        if source_manager.domain_exists(domain):
+                            continue
+                        if any(blocked in domain for blocked in BLOCKED_DOMAINS):
+                            continue
+
+                        score = await self._validate_source(url)
+                        result = {
+                            "url": url,
+                            "domain": domain,
+                            "score": score,
+                            "added": False,
+                            "query": "(known-site-fallback)",
+                            "timestamp": datetime.now().isoformat(),
+                        }
+
+                        if score >= MIN_VALIDATION_SCORE:
+                            source = source_manager.add_source(
+                                url=url,
+                                name=name,
+                                category="discovered",
+                                discovered_by_query="(known-site-fallback)",
+                                validation_score=score,
+                            )
+                            result["added"] = True
+                            result["source_id"] = source["id"]
+                            total_new_sources += 1
+                            logger.info(f"Added known wallpaper site: {name} ({domain}, score={score})")
+
+                        results.append(result)
+
+                        if total_new_sources >= 3:
+                            break
+
+                    except Exception as e:
+                        logger.warning(f"Error validating fallback {url}: {e}")
+
+                    await asyncio.sleep(3 + random.random() * 3)
+
+            # Stamp discovery as "run"
             if results:
                 source_manager.update_discovery_state(
                     last_discovery_run=datetime.now().isoformat()
@@ -183,6 +244,18 @@ class DiscoveryEngine:
         except Exception as e:
             logger.debug(f"Validation failed for {url}: {e}")
             return 0
+
+    def _get_fallback_sites(self) -> list[tuple[str, str]]:
+        """Get known wallpaper sites not already in sources, randomly shuffled."""
+        sites = [(s["url"], s["name"]) for s in KNOWN_WALLPAPER_SITES]
+        random.shuffle(sites)
+        # Filter out already-known domains
+        result = []
+        for url, name in sites:
+            domain = urlparse(url).netloc
+            if not source_manager.domain_exists(domain):
+                result.append((url, name))
+        return result[:5]  # Try up to 5 new sites per fallback run
 
     def _generate_new_queries(self):
         """Generate new search queries based on productive discovered sources."""
