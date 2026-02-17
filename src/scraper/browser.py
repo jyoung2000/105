@@ -2,7 +2,7 @@
 import asyncio
 import random
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, quote_plus
 from src.utils.logging import setup_logging
 
 logger = setup_logging("browser")
@@ -148,18 +148,43 @@ class BrowserManager:
         finally:
             await page.close()
 
-    async def search_duckduckgo(self, query: str) -> list[str]:
-        """Search DuckDuckGo HTML version and return result URLs."""
+    async def web_search(self, query: str) -> list[str]:
+        """Search the web using multiple engines with fallback.
+
+        Tries DuckDuckGo first, then Bing if DDG fails or is blocked.
+        """
+        # Try DuckDuckGo first
+        urls = await self._search_duckduckgo(query)
+        if urls:
+            return urls
+
+        # Fallback to Bing
+        logger.info(f"DDG returned 0 results for '{query}', trying Bing")
+        urls = await self._search_bing(query)
+        if urls:
+            return urls
+
+        logger.warning(f"All search engines returned 0 results for '{query}'")
+        return []
+
+    async def _search_duckduckgo(self, query: str) -> list[str]:
+        """Search DuckDuckGo and return result URLs."""
         page = await self.get_page()
         urls = []
         try:
-            # Use HTML-only version — server-rendered, stable selectors, no JS needed
-            await page.goto("https://html.duckduckgo.com/html/",
-                            wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(jitter(1000))
+            # Navigate to DuckDuckGo homepage — JS version is more reliable
+            # than html.duckduckgo.com which frequently blocks headless browsers
+            await page.goto("https://duckduckgo.com/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(jitter(2000))
 
-            # Type the query character by character with random delays
+            # Type the query
             search_input = await page.query_selector('input[name="q"]')
+            if not search_input:
+                # Try alternative selectors
+                search_input = await page.query_selector('textarea[name="q"]')
+            if not search_input:
+                search_input = await page.query_selector('[role="combobox"]')
+
             if search_input:
                 await search_input.click()
                 await page.wait_for_timeout(jitter(300))
@@ -169,73 +194,25 @@ class BrowserManager:
                 await page.keyboard.press("Enter")
             else:
                 logger.warning("DDG search input not found, using direct URL")
-                search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+                search_url = f"https://duckduckgo.com/?q={quote_plus(query)}"
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
 
-            await page.wait_for_timeout(jitter(3000))
+            # Wait longer for JS-rendered results
+            await page.wait_for_timeout(jitter(5000))
 
-            # HTML DDG has stable, well-known selectors
-            links = []
-            matched_selector = "none"
-            selectors = [
-                ("a.result__a", "html-classic"),
-                (".result__title a[href]", "html-title"),
-                (".result__url", "html-url"),
-                ("a.result__snippet", "html-snippet"),
-            ]
-            for selector, name in selectors:
-                links = await page.query_selector_all(selector)
-                if links:
-                    matched_selector = name
-                    break
+            # Extract result URLs from the page
+            urls = await self._extract_search_results(page, "ddg")
 
-            # Fallback: any link with an external href
-            if not links:
-                links = await page.query_selector_all("a[href^='http']")
-                matched_selector = "all-links-fallback"
+            logger.info(f"DDG search '{query}': {len(urls)} URLs")
 
-            # Filter DDG internal links, social media, etc.
-            skip_domains = {"duckduckgo.com", "html.duckduckgo.com", "duck.co",
-                            "spreadprivacy.com",
-                            "google.com", "facebook.com", "twitter.com", "x.com",
-                            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
-                            "reddit.com", "wikipedia.org", "amazon.com"}
-            for link in links[:30]:
-                href = await link.get_attribute("href")
-                if href and href.startswith("http"):
-                    try:
-                        parsed = urlparse(href)
-                        domain = parsed.netloc.lower()
-                        # DDG HTML version sometimes wraps URLs in redirect links
-                        if "duckduckgo.com" in domain:
-                            # Extract the actual URL from DDG redirect
-                            from urllib.parse import parse_qs
-                            params = parse_qs(parsed.query)
-                            if "uddg" in params:
-                                href = params["uddg"][0]
-                                domain = urlparse(href).netloc.lower()
-                            else:
-                                continue
-                        if not any(skip in domain for skip in skip_domains):
-                            if href not in urls:
-                                urls.append(href)
-                    except Exception:
-                        pass
-                if len(urls) >= 15:
-                    break
-
-            logger.info(f"DDG search '{query}': {len(urls)} URLs via '{matched_selector}'")
-
-            # Check for potential block/captcha
             if len(urls) == 0:
                 try:
                     page_text = await page.inner_text("body")
+                    text_len = len(page_text.strip())
                     if "captcha" in page_text.lower() or "unusual traffic" in page_text.lower():
-                        logger.warning("DDG may be blocking: detected captcha/unusual traffic text")
-                    elif len(page_text.strip()) < 200:
-                        logger.warning(f"DDG returned very short page ({len(page_text)} chars), possible block")
-                    else:
-                        logger.debug(f"DDG page text length: {len(page_text)} chars")
+                        logger.warning("DDG may be blocking: captcha/unusual traffic detected")
+                    elif text_len < 200:
+                        logger.warning(f"DDG returned very short page ({text_len} chars), possible block")
                 except Exception:
                     pass
 
@@ -244,6 +221,133 @@ class BrowserManager:
         finally:
             await page.close()
         return urls
+
+    async def _search_bing(self, query: str) -> list[str]:
+        """Search Bing and return result URLs."""
+        page = await self.get_page()
+        urls = []
+        try:
+            search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
+            await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(jitter(3000))
+
+            # Bing result selectors (stable across layouts)
+            selectors = [
+                ("li.b_algo h2 a[href]", "bing-algo"),
+                (".b_algo a[href^='http']", "bing-algo-link"),
+                ("h2 a[href^='http']", "bing-h2"),
+                ("cite", "bing-cite"),
+            ]
+
+            links = []
+            matched_selector = "none"
+            for selector, name in selectors:
+                links = await page.query_selector_all(selector)
+                if links:
+                    matched_selector = name
+                    break
+
+            if not links:
+                links = await page.query_selector_all("a[href^='http']")
+                matched_selector = "bing-all-links"
+
+            skip_domains = {"bing.com", "microsoft.com", "msn.com", "live.com",
+                            "microsoftonline.com", "office.com",
+                            "google.com", "facebook.com", "twitter.com", "x.com",
+                            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
+                            "reddit.com", "wikipedia.org", "amazon.com"}
+
+            for link in links[:30]:
+                href = await link.get_attribute("href")
+                if href and href.startswith("http"):
+                    try:
+                        domain = urlparse(href).netloc.lower()
+                        if not any(skip in domain for skip in skip_domains):
+                            if href not in urls:
+                                urls.append(href)
+                    except Exception:
+                        pass
+                if len(urls) >= 15:
+                    break
+
+            logger.info(f"Bing search '{query}': {len(urls)} URLs via '{matched_selector}'")
+
+            if len(urls) == 0:
+                try:
+                    page_text = await page.inner_text("body")
+                    if len(page_text.strip()) < 200:
+                        logger.warning(f"Bing returned very short page ({len(page_text)} chars)")
+                except Exception:
+                    pass
+
+        except Exception as e:
+            logger.warning(f"Bing search failed for '{query}': {e}")
+        finally:
+            await page.close()
+        return urls
+
+    async def _extract_search_results(self, page, engine: str) -> list[str]:
+        """Extract search result URLs from a search results page."""
+        urls = []
+
+        # Try multiple selector strategies
+        selectors = [
+            ("a[data-testid='result-title-a']", "modern"),
+            ("article a[href^='http']", "article"),
+            ("#links a.result__a", "classic"),
+            ("ol.react-results--main a[href]", "react"),
+            ("a[rel='noopener'][href^='http']", "noopener"),
+            ("h2 a[href^='http']", "h2-links"),
+            ("a.result__a", "html-result"),
+        ]
+
+        links = []
+        matched_selector = "none"
+        for selector, name in selectors:
+            links = await page.query_selector_all(selector)
+            if links:
+                matched_selector = name
+                break
+
+        if not links:
+            links = await page.query_selector_all("a[href^='http']")
+            matched_selector = "all-links-fallback"
+
+        skip_domains = {"duckduckgo.com", "html.duckduckgo.com", "duck.co",
+                        "spreadprivacy.com",
+                        "google.com", "facebook.com", "twitter.com", "x.com",
+                        "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
+                        "reddit.com", "wikipedia.org", "amazon.com"}
+
+        for link in links[:30]:
+            href = await link.get_attribute("href")
+            if href and href.startswith("http"):
+                try:
+                    parsed = urlparse(href)
+                    domain = parsed.netloc.lower()
+                    # DDG wraps URLs in redirect links
+                    if "duckduckgo.com" in domain:
+                        params = parse_qs(parsed.query)
+                        if "uddg" in params:
+                            href = params["uddg"][0]
+                            domain = urlparse(href).netloc.lower()
+                        else:
+                            continue
+                    if not any(skip in domain for skip in skip_domains):
+                        if href not in urls:
+                            urls.append(href)
+                except Exception:
+                    pass
+            if len(urls) >= 15:
+                break
+
+        logger.debug(f"{engine} extracted {len(urls)} URLs via '{matched_selector}'")
+        return urls
+
+    # Keep old name for backward compatibility
+    async def search_duckduckgo(self, query: str) -> list[str]:
+        """Search the web. Delegates to web_search() with multi-engine fallback."""
+        return await self.web_search(query)
 
     @property
     def is_available(self) -> bool:

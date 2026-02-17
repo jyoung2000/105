@@ -102,33 +102,94 @@ class Scheduler:
         sources = source_manager.get_enabled_sources()
         now = datetime.now()
 
+        # Cap schedule_hours to prevent adaptive scheduling from making sources dormant
+        MAX_SCHEDULE_HOURS = 48
+
+        due_sources = []
+        skipped_not_due = []
+        skipped_failures = []
+
         for source in sources:
-            if scraper_engine.is_busy:
-                break
-
-            # Check if due
-            last_scraped = source.get("last_scraped")
-            schedule_hours = source.get("schedule_hours", 12)
-
-            if last_scraped:
-                try:
-                    last_dt = datetime.fromisoformat(last_scraped)
-                    if now - last_dt < timedelta(hours=schedule_hours):
-                        continue
-                except (ValueError, TypeError):
-                    pass
+            name = source.get("name", source.get("url", "unknown"))
 
             # Auto-disable sources with too many consecutive failures
             if source.get("consecutive_failures", 0) >= 5:
                 if source.get("enabled", True):
                     source_manager.update_source(source["id"], enabled=False)
-                    logger.info(f"Auto-disabled source {source.get('name')}: too many consecutive failures")
+                    logger.info(f"Auto-disabled source {name}: too many consecutive failures")
+                skipped_failures.append(name)
                 continue
 
             if not source.get("enabled", True):
                 continue
 
-            logger.info(f"Scheduled scrape: {source.get('name', source.get('url'))}")
+            # Cap runaway schedule_hours
+            schedule_hours = source.get("schedule_hours", 12)
+            if schedule_hours > MAX_SCHEDULE_HOURS:
+                schedule_hours = MAX_SCHEDULE_HOURS
+                source_manager.update_source(source["id"], schedule_hours=MAX_SCHEDULE_HOURS)
+                logger.info(f"Capped schedule_hours to {MAX_SCHEDULE_HOURS}h for {name}")
+
+            # Check if due
+            last_scraped = source.get("last_scraped")
+            if last_scraped:
+                try:
+                    last_dt = datetime.fromisoformat(last_scraped)
+                    remaining = timedelta(hours=schedule_hours) - (now - last_dt)
+                    if remaining > timedelta(0):
+                        skipped_not_due.append((name, remaining))
+                        continue
+                except (ValueError, TypeError):
+                    pass  # Invalid timestamp — treat as due
+
+            due_sources.append(source)
+
+        # Log summary of what happened
+        logger.info(
+            f"Source check: {len(due_sources)} due, "
+            f"{len(skipped_not_due)} not due, "
+            f"{len(skipped_failures)} failed/disabled"
+        )
+        if skipped_not_due:
+            for sname, remaining in skipped_not_due[:5]:
+                hours_left = remaining.total_seconds() / 3600
+                logger.debug(f"  Not due: {sname} ({hours_left:.1f}h remaining)")
+
+        # If no sources are due but we have sources, force-scrape the one
+        # that was scraped longest ago (prevents permanent stall)
+        if not due_sources and sources:
+            oldest = None
+            oldest_dt = now
+            for source in sources:
+                if source.get("consecutive_failures", 0) >= 5:
+                    continue
+                if not source.get("enabled", True):
+                    continue
+                last_scraped = source.get("last_scraped")
+                if not last_scraped:
+                    oldest = source
+                    break  # Never scraped — top priority
+                try:
+                    dt = datetime.fromisoformat(last_scraped)
+                    if dt < oldest_dt:
+                        oldest_dt = dt
+                        oldest = source
+                except (ValueError, TypeError):
+                    oldest = source
+                    break
+            if oldest:
+                age = now - oldest_dt if oldest.get("last_scraped") else None
+                age_str = f"{age.total_seconds()/3600:.1f}h ago" if age else "never"
+                logger.info(f"No sources due — force-scraping oldest: {oldest.get('name')} (last: {age_str})")
+                due_sources = [oldest]
+
+        # Scrape due sources
+        for source in due_sources:
+            if scraper_engine.is_busy:
+                break
+
+            name = source.get("name", source.get("url", "unknown"))
+            logger.info(f"Scheduled scrape: {name}")
             try:
                 job = await scraper_engine.scrape_url(
                     url=source["url"],
@@ -155,13 +216,13 @@ class Scheduler:
                     elif job.images_found == 0:
                         quality = source_manager.compute_source_quality(source["id"])
                         if quality < 20:
-                            new_hours = min(72, source.get("schedule_hours", 12) * 2)
+                            new_hours = min(MAX_SCHEDULE_HOURS, source.get("schedule_hours", 12) * 2)
                             source_manager.update_source(source["id"], schedule_hours=new_hours)
                 except Exception as e:
                     logger.debug(f"Adaptive scheduling error: {e}")
 
             except Exception as e:
-                logger.error(f"Scheduled scrape failed for {source.get('name')}: {e}")
+                logger.error(f"Scheduled scrape failed for {name}: {e}")
                 source_manager.record_scrape(source["id"], 0, 0, 1)
 
             # Small delay between sources
