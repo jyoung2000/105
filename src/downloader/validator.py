@@ -68,12 +68,17 @@ class ImageValidator:
             return False, f"Invalid image: {e}"
 
     def _detect_watermark(self, img: Image.Image) -> Tuple[bool, str]:
-        """Detect watermarked images using pixel analysis.
+        """Detect blatant stock-photo watermarks using pixel analysis.
+
+        Only flags images with very obvious, large watermarks that clearly
+        degrade the image (e.g. Shutterstock, iStock, Getty tiled overlays).
+        Tuned for high precision — prefers letting a subtle watermark through
+        over rejecting a clean wallpaper.
 
         Checks for:
-        1. Repeating semi-transparent diagonal patterns (stock photo watermarks)
-        2. Uniform low-opacity overlays across the center (shutterstock-style)
-        3. Grid patterns of identical small marks (depositphotos-style)
+        1. Semi-transparent overlay covering the center (shutterstock-style)
+        2. Repeating tiled pattern across the image (depositphotos-style)
+        Both checks must exceed strict thresholds to trigger.
         """
         try:
             # Work on a smaller version for speed
@@ -88,12 +93,6 @@ class ImageValidator:
                 small = small.convert("RGB")
 
             arr = np.array(small, dtype=np.float32)
-            sw, sh = small.size
-
-            # --- Check 1: Diagonal stripe pattern detection ---
-            # Watermarks like Shutterstock/iStock use repeating diagonal text.
-            # Convert to grayscale, apply edge detection, then check for
-            # regular diagonal patterns in the frequency domain.
             gray = np.mean(arr, axis=2)
 
             # Extract center region (watermarks are typically centered)
@@ -104,22 +103,14 @@ class ImageValidator:
             if center.size == 0:
                 return False, ""
 
-            # Apply Sobel-like edge detection on the center crop
-            edges_h = np.abs(np.diff(center, axis=0))
-            edges_v = np.abs(np.diff(center, axis=1))
-
-            # Watermarked images have higher edge density in the center
-            # compared to natural images, because the watermark text
-            # creates artificial edges on top of the photo content.
-            # Use the ratio of high-edge pixels to total pixels.
-            h_edges = edges_h[:, :min(edges_h.shape[1], edges_v.shape[1])]
-            v_edges = edges_v[:min(edges_h.shape[0], edges_v.shape[0]), :]
-            combined_edges = (h_edges[:v_edges.shape[0], :] + v_edges[:h_edges.shape[0], :]) / 2
-
-            # --- Check 2: Semi-transparent overlay detection ---
-            # Stock watermarks reduce contrast in the center region.
-            # Compare center vs edge contrast/variance.
-            edge_band = 50  # pixels from edge
+            # --- Check 1: Semi-transparent overlay detection ---
+            # Blatant stock watermarks apply a large white/grey overlay that
+            # noticeably flattens the center contrast.  Compare center vs
+            # edge variance.  Only trigger on extreme differences — natural
+            # images (fog, sky, snow) can have low center variance too, so
+            # we require a very low ratio AND high border variance AND a
+            # large absolute difference to avoid false positives.
+            edge_band = 50
             if gray.shape[0] > edge_band * 4 and gray.shape[1] > edge_band * 4:
                 border_top = gray[:edge_band, :]
                 border_bottom = gray[-edge_band:, :]
@@ -132,34 +123,59 @@ class ImageValidator:
                 ])
                 center_var = np.var(center)
 
-                # If center has MUCH lower variance than edges, it suggests
-                # a semi-transparent overlay flattening the center
                 if border_var > 0 and center_var > 0:
                     ratio = center_var / border_var
-                    # Very washed-out centers (ratio < 0.3) suggest watermark overlay
-                    if ratio < 0.25 and border_var > 500:
-                        logger.debug(f"Watermark suspect: center/border variance ratio={ratio:.2f}")
+                    # Only flag truly extreme cases: ratio < 0.12 (was 0.25)
+                    # with high border variance (> 800, was 500) and a large
+                    # absolute variance drop.  This combination is rare in
+                    # natural photos but common in watermarked stock images.
+                    if (ratio < 0.12
+                            and border_var > 800
+                            and (border_var - center_var) > 600):
+                        logger.debug(
+                            f"Watermark detected: center/border variance "
+                            f"ratio={ratio:.2f}, border_var={border_var:.0f}, "
+                            f"center_var={center_var:.0f}"
+                        )
                         return True, "semi-transparent overlay (low center contrast)"
 
-            # --- Check 3: Repeating pattern via autocorrelation ---
-            # Stock watermarks tile the same text/logo diagonally.
-            # Check if the center region has strong periodic correlations.
+            # --- Check 2: Repeating tiled pattern via autocorrelation ---
+            # Tiled watermarks (e.g. "depositphotos" repeated 20+ times)
+            # produce strong periodic correlations.  We sample MULTIPLE
+            # horizontal stripes and require the pattern to appear
+            # consistently across them — this eliminates false positives
+            # from natural repeating textures (waves, fences, blinds) which
+            # tend to be localized or axis-aligned rather than tiled.
             if center.shape[0] >= 100 and center.shape[1] >= 100:
-                # Sample a horizontal stripe from the center
-                stripe = center[center.shape[0] // 2, :]
-                stripe = stripe - np.mean(stripe)
-                norm = np.sum(stripe ** 2)
-                if norm > 0:
-                    # Check autocorrelation at various lags
-                    high_corr_count = 0
+                stripe_rows = [
+                    center.shape[0] // 4,
+                    center.shape[0] // 2,
+                    3 * center.shape[0] // 4,
+                ]
+                stripes_with_pattern = 0
+                for row in stripe_rows:
+                    stripe = center[row, :]
+                    stripe = stripe - np.mean(stripe)
+                    norm = np.sum(stripe ** 2)
+                    if norm == 0:
+                        continue
+                    high_corr = 0
                     for lag in range(30, min(150, len(stripe) // 2), 10):
                         corr = np.sum(stripe[:-lag] * stripe[lag:]) / norm
-                        if corr > 0.4:
-                            high_corr_count += 1
+                        if corr > 0.55:  # was 0.4 — require stronger correlation
+                            high_corr += 1
+                    if high_corr >= 4:  # was 3 — require more correlated lags
+                        stripes_with_pattern += 1
 
-                    if high_corr_count >= 3:
-                        logger.debug(f"Watermark suspect: repeating pattern ({high_corr_count} correlated lags)")
-                        return True, "repeating diagonal pattern"
+                # Only flag if the repeating pattern is consistent across
+                # at least 2 out of 3 sampled stripes (tiled watermarks
+                # cover the whole center, not just one stripe)
+                if stripes_with_pattern >= 2:
+                    logger.debug(
+                        f"Watermark detected: repeating tiled pattern "
+                        f"({stripes_with_pattern}/3 stripes matched)"
+                    )
+                    return True, "repeating tiled watermark pattern"
 
         except Exception as e:
             logger.debug(f"Watermark detection error: {e}")
