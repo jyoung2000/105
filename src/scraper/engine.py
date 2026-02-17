@@ -200,23 +200,23 @@ class ScraperEngine:
                 job.error_log.append(f"Page load failed: {e}")
                 break
 
-            images = await adapter.scrape(html, current_url)
-            logger.info(f"Found {len(images)} direct images on page {page_num}")
-
-            # Always check for detail page links — listing pages have thumbnails
-            # linking to detail pages where full-size images live
+            # Check for detail page links FIRST — listing pages have thumbnails
+            # linking to detail pages where full-size images live.
+            # If detail links exist, this is a gallery/listing page and we should
+            # follow links to detail pages for full-res images instead of downloading
+            # the listing page thumbnails (which are small/low-quality).
             detail_links = adapter.get_detail_page_links(html, current_url)
             if detail_links:
-                logger.info(f"Found {len(detail_links)} detail page links on page {page_num}")
-                found_urls = {img.url for img in images}
-                detail_images = await self._scrape_detail_pages(
+                logger.info(f"Found {len(detail_links)} detail page links on page {page_num} — following for full-res images")
+                images = await self._scrape_detail_pages(
                     detail_links, adapter, job, scroll_count, scroll_wait
                 )
-                for img in detail_images:
-                    if img.url not in found_urls:
-                        images.append(img)
-                        found_urls.add(img.url)
-                logger.info(f"Total images after detail pages: {len(images)}")
+                logger.info(f"Got {len(images)} full-res images from detail pages")
+            else:
+                # No detail links — this might be a detail page itself, or a site
+                # that serves full-res images directly on listing pages
+                images = await adapter.scrape(html, current_url)
+                logger.info(f"Found {len(images)} direct images on page {page_num} (no detail links)")
 
             job.images_found += len(images)
 
