@@ -770,6 +770,7 @@ async function resetMapping() {
 let browsePage = 1;
 const BROWSE_PAGE_SIZE = 40;
 let browseFieldMapping = {};
+let browseApiUrl = '';
 
 async function loadBrowse(page) {
     if (page !== undefined) browsePage = page;
@@ -801,6 +802,7 @@ async function loadBrowse(page) {
     try {
         const data = await api(url);
         browseFieldMapping = data.field_mapping || {};
+        browseApiUrl = data.api_url || '';
         const rows = data.results || [];
         const total = data.count || 0;
         const totalPages = Math.ceil(total / BROWSE_PAGE_SIZE);
@@ -817,31 +819,35 @@ async function loadBrowse(page) {
 }
 
 function browseField(row, scraperField) {
-    // Use field mapping to get the Baserow column name, then read the value
     const colName = browseFieldMapping[scraperField] || scraperField;
     return row[colName];
 }
 
+function proxyImgUrl(rawUrl) {
+    // Route all Baserow image URLs through our backend proxy to avoid
+    // CORS, auth, and relative-URL issues.
+    if (!rawUrl) return '';
+    // Resolve relative URLs against the Baserow api_url
+    if (rawUrl.startsWith('/')) {
+        rawUrl = browseApiUrl.replace(/\/+$/, '') + rawUrl;
+    }
+    return '/api/baserow/image-proxy?url=' + encodeURIComponent(rawUrl);
+}
+
 function browseImageUrl(row) {
-    // Extract the best image URL from the imageFile field
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
     const file = fileField[0];
-    // Prefer the full URL for viewing
-    return file.url || '';
+    return proxyImgUrl(file.url || '');
 }
 
 function browseThumbnailUrl(row) {
-    // Get the smallest usable thumbnail from Baserow file
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
     const file = fileField[0];
-    // Try thumbnails: small > tiny > original
-    if (file.thumbnails) {
-        if (file.thumbnails.small) return file.thumbnails.small.url;
-        if (file.thumbnails.tiny) return file.thumbnails.tiny.url;
-    }
-    return file.url || '';
+    // Use the full image URL — Baserow's built-in thumbnails are too small (48px)
+    // for gallery cards. The proxy adds caching headers so repeat loads are fast.
+    return proxyImgUrl(file.url || '');
 }
 
 function renderBrowseGrid(rows) {
@@ -860,7 +866,7 @@ function renderBrowseGrid(rows) {
         return `
             <div class="browse-item" onclick="showBrowseDetail(${rowId})">
                 <img src="${esc(thumb)}" alt="${esc(title)}" loading="lazy"
-                    onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231e2a4a%22 width=%22200%22 height=%22200%22/></svg>'">
+                    onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22120%22><rect fill=%22%231e2a4a%22 width=%22200%22 height=%22120%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23556%22 font-size=%2214%22 text-anchor=%22middle%22 dy=%22.3em%22>No Image</text></svg>'">
                 <div class="browse-badge">${width}x${height}${isMobile ? ' M' : ''}</div>
                 <div class="browse-overlay">
                     <div class="browse-overlay-title">${esc(title)}</div>
@@ -911,6 +917,7 @@ async function showBrowseDetail(rowId) {
     try {
         const row = await api(`/api/baserow/rows/${rowId}`);
         const fm = row.field_mapping || browseFieldMapping;
+        const detailApiUrl = row.api_url || browseApiUrl;
         const getF = (key) => { const col = fm[key] || key; return row[col]; };
 
         const title = getF('wallpaperTitle') || 'Untitled';
@@ -924,11 +931,16 @@ async function showBrowseDetail(rowId) {
         const isMobile = getF('isMobile');
         const imgHash = getF('imgHash') || '';
 
-        // Get full image URL from file field
+        // Get full image URL from file field, proxied through our backend
         const fileField = getF('imageFile');
         let fullImgUrl = '';
+        let rawImgUrl = '';
         if (fileField && Array.isArray(fileField) && fileField.length > 0) {
-            fullImgUrl = fileField[0].url || '';
+            rawImgUrl = fileField[0].url || '';
+            if (rawImgUrl.startsWith('/')) {
+                rawImgUrl = detailApiUrl.replace(/\/+$/, '') + rawImgUrl;
+            }
+            fullImgUrl = '/api/baserow/image-proxy?url=' + encodeURIComponent(rawImgUrl);
         }
 
         showModal(`

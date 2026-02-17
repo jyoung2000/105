@@ -3,7 +3,9 @@ import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
+import httpx
 from src.api.models import (
     ScrapeRequest, SourceCreate, SourceUpdate,
     QueryCreate, QueryUpdate, BaserowConfig,
@@ -405,6 +407,42 @@ async def update_field_mapping(data: FieldMappingUpdate):
     return {"status": "saved", "field_mapping": data.field_mapping}
 
 
+@router.get("/baserow/image-proxy")
+async def baserow_image_proxy(url: str = Query(..., description="Baserow file URL to proxy")):
+    """Proxy Baserow-hosted images to avoid CORS/auth issues."""
+    cfg = config_store.get_section("baserow")
+    api_url = cfg.get("api_url", "")
+    api_token = cfg.get("api_token", "")
+    if not api_url or not api_token:
+        raise HTTPException(400, "Baserow not configured")
+
+    # Resolve relative URLs against the Baserow API URL
+    if url.startswith("/"):
+        url = api_url.rstrip("/") + url
+    # Only proxy URLs from the configured Baserow host
+    if not url.startswith(api_url.rstrip("/")):
+        raise HTTPException(400, "URL does not belong to configured Baserow instance")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            follow_redirects=True,
+            headers={"Authorization": f"Token {api_token}"},
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            return StreamingResponse(
+                iter([resp.content]),
+                media_type=content_type,
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Baserow returned {e.response.status_code}")
+    except Exception as e:
+        raise HTTPException(502, f"Failed to fetch image: {e}")
+
+
 @router.get("/baserow/rows")
 async def list_baserow_rows(page: int = 1, size: int = 50, search: str = "",
                              order_by: str = ""):
@@ -422,8 +460,8 @@ async def list_baserow_rows(page: int = 1, size: int = 50, search: str = "",
         data = await client.list_rows(
             page=page, size=size, search=search, order_by=order_by,
         )
-        # Include the field mapping so the frontend knows which fields to read
         data["field_mapping"] = client.field_mapping
+        data["api_url"] = cfg.get("api_url", "")
         return data
     except Exception as e:
         raise HTTPException(500, f"Failed to fetch rows: {e}")
@@ -448,6 +486,7 @@ async def get_baserow_row(row_id: int):
         if not row:
             raise HTTPException(404, "Row not found")
         row["field_mapping"] = client.field_mapping
+        row["api_url"] = cfg.get("api_url", "")
         return row
     except HTTPException:
         raise
