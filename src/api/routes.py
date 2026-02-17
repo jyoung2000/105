@@ -550,6 +550,21 @@ async def list_baserow_rows(page: int = 1, size: int = 50, search: str = "",
         table_id=cfg.get("table_id", 0),
     )
     client.field_mapping = cfg.get("field_mapping", {})
+    # Translate scraper field names in order_by to actual Baserow column names.
+    # e.g. "-wallpaperTitle" -> "-Title" if field_mapping maps wallpaperTitle->Title.
+    # The special "id" field is always valid and doesn't need translation.
+    if order_by:
+        translated_parts = []
+        for part in order_by.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            desc = part.startswith("-")
+            field_name = part.lstrip("-")
+            if field_name != "id":
+                field_name = client.field_mapping.get(field_name, field_name)
+            translated_parts.append(f"-{field_name}" if desc else field_name)
+        order_by = ",".join(translated_parts)
     try:
         data = await client.list_rows(
             page=page, size=size, search=search, order_by=order_by,

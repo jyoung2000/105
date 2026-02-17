@@ -9,6 +9,11 @@ let lastGlobalStatus = null;
 let tableFieldsCache = [];
 let currentMapping = {};
 
+// Arrow key navigation state (declared early so onTabSwitch can reference them)
+let navItems = [];       // Cached grid items for keyboard navigation
+let navSelectedIdx = -1; // Currently selected item index
+let navActiveTab = '';   // Which tab navigation is active on
+
 // === Tab Navigation ===
 document.querySelectorAll('.nav-tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -1458,9 +1463,7 @@ function esc(s) {
 
 // ==================== ARROW KEY NAVIGATION (Gallery + Browse) ====================
 // Generic grid keyboard navigation — works on any tab with grid items.
-let navItems = [];       // Cached grid items for keyboard navigation
-let navSelectedIdx = -1; // Currently selected item index
-let navActiveTab = '';   // Which tab navigation is active on
+// (navItems, navSelectedIdx, navActiveTab declared at top of file)
 
 // Configuration per tab: item selector, selected class
 const NAV_CONFIG = {
