@@ -123,6 +123,13 @@ body {
     transition: transform 0.3s;
 }
 .gallery-item:hover img { transform: scale(1.05); }
+.gallery-selected {
+    outline: 3px solid var(--accent);
+    outline-offset: -3px;
+    box-shadow: 0 0 12px rgba(233, 69, 96, 0.5);
+}
+.gallery-selected img { transform: scale(1.05); }
+.gallery-selected .gallery-overlay { opacity: 1; }
 .gallery-overlay {
     position: absolute; bottom: 0; left: 0; right: 0;
     background: linear-gradient(transparent, rgba(0,0,0,0.8));

@@ -812,6 +812,76 @@ function esc(s) {
     return div.innerHTML;
 }
 
+// ==================== ARROW KEY GALLERY NAVIGATION ====================
+let galleryEntries = [];   // Cached entry IDs for keyboard navigation
+let gallerySelectedIdx = -1; // Currently selected gallery item index
+
+// Update cached entries when gallery renders
+function updateGalleryEntries() {
+    const items = document.querySelectorAll('.gallery-item');
+    galleryEntries = Array.from(items);
+    // Clear selection if gallery was reloaded
+    gallerySelectedIdx = -1;
+}
+
+function selectGalleryItem(idx) {
+    if (galleryEntries.length === 0) return;
+    // Clamp index
+    idx = Math.max(0, Math.min(idx, galleryEntries.length - 1));
+
+    // Remove previous selection highlight
+    if (gallerySelectedIdx >= 0 && gallerySelectedIdx < galleryEntries.length) {
+        galleryEntries[gallerySelectedIdx].classList.remove('gallery-selected');
+    }
+
+    gallerySelectedIdx = idx;
+    const item = galleryEntries[idx];
+    item.classList.add('gallery-selected');
+
+    // Scroll item into view smoothly
+    item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+}
+
+document.addEventListener('keydown', (e) => {
+    // Only handle arrow keys when gallery tab is active and no modal is open
+    const galleryTab = document.getElementById('tab-gallery');
+    if (!galleryTab || !galleryTab.classList.contains('active')) return;
+    const modal = document.getElementById('modal-overlay');
+    if (modal && modal.classList.contains('active')) {
+        // In modal: Escape closes it
+        if (e.key === 'Escape') { closeModal(); e.preventDefault(); }
+        return;
+    }
+
+    // Don't intercept when typing in inputs
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+    updateGalleryEntries();
+    if (galleryEntries.length === 0) return;
+
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (gallerySelectedIdx < 0) {
+            selectGalleryItem(0);
+        } else {
+            selectGalleryItem(gallerySelectedIdx + 1);
+        }
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (gallerySelectedIdx < 0) {
+            selectGalleryItem(0);
+        } else {
+            selectGalleryItem(gallerySelectedIdx - 1);
+        }
+    } else if (e.key === 'Enter') {
+        // Open detail view for selected item
+        if (gallerySelectedIdx >= 0 && gallerySelectedIdx < galleryEntries.length) {
+            e.preventDefault();
+            galleryEntries[gallerySelectedIdx].click();
+        }
+    }
+});
+
 // === Init ===
 window.addEventListener('DOMContentLoaded', () => {
     loadGallerySummary();

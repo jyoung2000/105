@@ -382,8 +382,10 @@ class ScraperEngine:
             detail_url = link_info["url"]
             try:
                 logger.info(f"Visiting detail page {i+1}/{len(links_to_visit)}: {detail_url}")
+                # Use more scrolls on detail pages to trigger lazy-loading
+                # (collection pages can have many images below the fold)
                 html = await browser_manager.get_page_content(
-                    detail_url, scroll_count=min(scroll_count, 3),
+                    detail_url, scroll_count=max(scroll_count, 8),
                     scroll_wait_ms=scroll_wait,
                     referer=gallery_url,
                 )

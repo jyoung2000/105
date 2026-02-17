@@ -371,10 +371,12 @@ class BrowserManager:
         return netloc.lower()
 
     async def web_search(self, query: str) -> list[str]:
-        """Search the web using httpx (not Playwright) for reliability.
+        """Search the web for URLs matching a query.
 
-        Search engines block headless browsers but allow normal HTTP requests.
-        Tries multiple search engines with fallback.
+        Tries multiple approaches:
+        1. httpx-based searches (DDG Lite, DDG HTML, Bing, Google)
+        2. If all httpx searches fail (common in Docker), falls back to
+           Playwright browser-based DDG search which handles JS/captchas.
         """
         headers = {
             "User-Agent": self._current_ua or USER_AGENTS[0],
@@ -404,6 +406,14 @@ class BrowserManager:
 
         # Try Google as last resort
         urls = await self._search_google_http(query, headers)
+        if urls:
+            return urls
+
+        # All httpx-based searches failed — try Playwright browser-based search
+        # (Docker containers often get blocked by search engines via httpx,
+        # but a full browser with stealth patches can get through)
+        logger.info(f"All httpx searches returned 0 for '{query}', trying Playwright browser search")
+        urls = await self._search_ddg_browser(query)
         if urls:
             return urls
 
@@ -599,6 +609,90 @@ class BrowserManager:
 
         except Exception as e:
             logger.debug(f"Google search failed for '{query}': {e}")
+        return urls
+
+    async def _search_ddg_browser(self, query: str) -> list[str]:
+        """Search DuckDuckGo using Playwright browser (stealth mode).
+
+        Uses the HTML-only version at html.duckduckgo.com/html/ which has
+        stable selectors and works server-side. Playwright handles any JS
+        challenges that block httpx requests from Docker containers.
+        """
+        urls = []
+        page = None
+        try:
+            page = await self.get_page()
+
+            # Navigate to DDG HTML search
+            await page.goto("https://html.duckduckgo.com/html/",
+                            wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(jitter(1500))
+
+            # Type query with human-like delays
+            search_input = await page.query_selector('input[name="q"]')
+            if search_input:
+                await search_input.click()
+                await page.wait_for_timeout(jitter(300))
+                # Type each character with random delay (human-like)
+                for char in query:
+                    await search_input.type(char, delay=random.randint(50, 150))
+                await page.wait_for_timeout(jitter(500))
+                await page.keyboard.press("Enter")
+            else:
+                # Fallback: navigate directly with query in URL
+                search_url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
+                await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+
+            # Wait for results to load
+            await page.wait_for_timeout(jitter(3000))
+
+            # Extract results from the page
+            html = await page.content()
+            soup = BeautifulSoup(html, "lxml")
+
+            # DDG HTML version selectors (try multiple for resilience)
+            result_links = soup.select("a.result__a")
+            if not result_links:
+                result_links = soup.select("a.result-link")
+            if not result_links:
+                # Fallback: links inside result containers
+                result_links = []
+                for div in soup.select(".result, .web-result, .links_main"):
+                    a_tag = div.find("a", href=True)
+                    if a_tag:
+                        href = a_tag.get("href", "")
+                        if href.startswith("http") or "uddg=" in href:
+                            result_links.append(a_tag)
+            if not result_links:
+                # Broadest fallback: any link that looks like a search result
+                for a_tag in soup.find_all("a", href=True):
+                    href = a_tag.get("href", "")
+                    if "uddg=" in href:
+                        result_links.append(a_tag)
+
+            ddg_skip = {"duckduckgo.com", "html.duckduckgo.com", "lite.duckduckgo.com"}
+            urls = self._filter_search_urls(result_links, ddg=True, extra_skip=ddg_skip)
+            logger.info(f"DDG browser search '{query}': {len(urls)} URLs from {len(result_links)} links")
+
+            if len(urls) == 0:
+                # Log diagnostics
+                all_links = soup.find_all("a", href=True)
+                page_title = soup.find("title")
+                title_text = page_title.get_text(strip=True)[:80] if page_title else "(no title)"
+                body_len = len(html)
+                logger.debug(
+                    f"DDG browser diagnostics: total_links={len(all_links)}, "
+                    f"body_len={body_len}, title='{title_text}'"
+                )
+
+        except Exception as e:
+            logger.warning(f"DDG browser search failed for '{query}': {e}")
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
         return urls
 
     def _filter_search_urls(self, links, ddg: bool = False, extra_skip: set = None) -> list[str]:

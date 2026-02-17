@@ -155,22 +155,37 @@ class GenericAdapter(BaseAdapter):
         detail_images = self._find_detail_page_images(soup, page_url, seen_urls)
         if detail_images:
             logger.info(f"Found {len(detail_images)} wallpaper images via detail-page detection on {page_url}")
-            return detail_images
 
         # SECOND: Try download buttons/links (common on wallpaper sites)
         download_images = self._find_download_links(soup, page_url, seen_urls)
         if download_images:
             logger.info(f"Found {len(download_images)} wallpaper images via download links on {page_url}")
-            return download_images
+
+        # Combine targeted results
+        targeted_images = detail_images + download_images
+
+        # If targeted strategies found several images, return them
+        # (no need to run general extraction on true detail pages with clear selectors)
+        total_page_imgs = len(soup.find_all("img"))
+        if targeted_images and (len(targeted_images) >= 3 or total_page_imgs <= 15):
+            return targeted_images
 
         # THIRD: Try to find the single largest/main image on the page
         # (detail pages often have one hero image without specific selectors)
-        hero = self._find_hero_image(soup, page_url, seen_urls)
-        if hero:
-            logger.info(f"Found hero image on {page_url}")
-            return [hero]
+        if not targeted_images:
+            hero = self._find_hero_image(soup, page_url, seen_urls)
+            if hero:
+                targeted_images.append(hero)
+                logger.info(f"Found hero image on {page_url}")
 
-        # FOURTH: General image extraction (for pages without specific selectors)
+        # If we have some targeted images but the page has many more <img> tags,
+        # this is likely a collection/gallery page — also run general extraction
+        # to catch additional wallpapers the selectors missed.
+        if targeted_images and total_page_imgs <= 15:
+            return targeted_images
+
+        # FOURTH: General image extraction (for pages without specific selectors,
+        # or collection pages where targeted strategies only found a few)
 
         # Strategy 1: Find direct high-res image links (<a> pointing to image files)
         for link in soup.find_all("a", href=True):
@@ -249,6 +264,10 @@ class GenericAdapter(BaseAdapter):
                 score = self._score_url(abs_url) + 2
                 images.append(self._make_image(abs_url, "", "", "", page_url, elem, score))
 
+        # Merge with any targeted images found earlier
+        if targeted_images:
+            images = targeted_images + images
+
         # Sort by score (highest first) and return
         images.sort(key=lambda x: x.width * x.height if x.width and x.height else 0, reverse=True)
         logger.info(f"Found {len(images)} potential wallpapers on {page_url}")
@@ -277,40 +296,43 @@ class GenericAdapter(BaseAdapter):
 
         These selectors target known wallpaper site patterns where the main
         image has a specific ID or class (e.g., img#wallpaper on Wallhaven).
+        Uses select() (not select_one) to find ALL matching images — collection
+        pages can have many wallpaper images matching the same selector.
         Always tries to find the HIGHEST resolution source available.
         """
         images = []
         for selector in DETAIL_IMAGE_SELECTORS:
             try:
-                elem = soup.select_one(selector)
-                if not elem:
+                elements = soup.select(selector)
+                if not elements:
                     continue
 
-                # Could be an img tag or a div with background
-                if elem.name == "img":
-                    # Try to get the highest-res source first
-                    highres = self._find_highres_source(elem, page_url)
-                    src = highres or elem.get("src", "") or elem.get("data-src", "") or elem.get("data-original", "") or ""
-                    if src and not src.startswith("data:"):
-                        abs_url = urljoin(page_url, src)
-                        if abs_url not in seen_urls and not self._is_excluded(abs_url):
-                            seen_urls.add(abs_url)
-                            alt = elem.get("alt", "") or ""
-                            title = elem.get("title", "") or alt
-                            width = self._parse_dim(elem.get("width", ""))
-                            height = self._parse_dim(elem.get("height", ""))
-                            images.append(self._make_image(
-                                abs_url, "", alt, title, page_url, elem,
-                                score=5, width=width, height=height
-                            ))
-                else:
-                    # Div/element — check background-image
-                    style = elem.get("style", "")
-                    bg_urls = re.findall(r'url\(["\']?(https?://[^"\')\s]+)["\']?\)', style)
-                    for url in bg_urls:
-                        if url not in seen_urls and not self._is_excluded(url):
-                            seen_urls.add(url)
-                            images.append(self._make_image(url, "", "", "", page_url, elem, score=5))
+                for elem in elements:
+                    # Could be an img tag or a div with background
+                    if elem.name == "img":
+                        # Try to get the highest-res source first
+                        highres = self._find_highres_source(elem, page_url)
+                        src = highres or elem.get("src", "") or elem.get("data-src", "") or elem.get("data-original", "") or ""
+                        if src and not src.startswith("data:"):
+                            abs_url = urljoin(page_url, src)
+                            if abs_url not in seen_urls and not self._is_excluded(abs_url):
+                                seen_urls.add(abs_url)
+                                alt = elem.get("alt", "") or ""
+                                title = elem.get("title", "") or alt
+                                width = self._parse_dim(elem.get("width", ""))
+                                height = self._parse_dim(elem.get("height", ""))
+                                images.append(self._make_image(
+                                    abs_url, "", alt, title, page_url, elem,
+                                    score=5, width=width, height=height
+                                ))
+                    else:
+                        # Div/element — check background-image
+                        style = elem.get("style", "")
+                        bg_urls = re.findall(r'url\(["\']?(https?://[^"\')\s]+)["\']?\)', style)
+                        for url in bg_urls:
+                            if url not in seen_urls and not self._is_excluded(url):
+                                seen_urls.add(url)
+                                images.append(self._make_image(url, "", "", "", page_url, elem, score=5))
             except Exception:
                 continue
         return images
