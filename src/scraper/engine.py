@@ -13,6 +13,7 @@ from src.scraper.adapters.generic import GenericAdapter
 from src.downloader.manager import DownloadManager
 from src.downloader.compressor import ImageCompressor
 from src.downloader.validator import ImageValidator
+from src.downloader.enhancer import ImageEnhancer
 from src.ai.captioner import AICaptioner
 from src.storage.baserow import BaserowClient
 from src.storage.config_store import config_store
@@ -110,6 +111,13 @@ class ScraperEngine:
             allowed_aspects=allowed_aspects, allow_mobile=allow_mobile,
             watermark_detection=watermark_detection,
         )
+
+    def _get_enhancer(self) -> ImageEnhancer:
+        """Get enhancer configured with current scraping settings."""
+        min_w = config_store.get("scraping", "min_width", default=800)
+        min_h = config_store.get("scraping", "min_height", default=600)
+        max_upscale = config_store.get("scraping", "max_enhance_upscale", default=2.5)
+        return ImageEnhancer(min_width=min_w, min_height=min_h, max_upscale=max_upscale)
 
     async def initialize(self):
         """Initialize engine components (non-fatal)."""
@@ -490,9 +498,25 @@ class ScraperEngine:
             # Validate
             is_valid, reason = validator.validate(dl_path)
             if not is_valid:
-                result.error = f"Validation failed: {reason}"
-                logger.info(f"Validation failed ({reason}): {img.url[:80]}")
-                return result
+                # Try AI enhancement for near-miss images (too small or wrong aspect ratio)
+                enhanced_path = None
+                if "Too small" in reason or "Aspect ratio" in reason:
+                    enhance_enabled = config_store.get("scraping", "enhance_near_miss", default=True)
+                    if enhance_enabled:
+                        enhancer = self._get_enhancer()
+                        enhanced = enhancer.enhance(dl_path)
+                        if enhanced:
+                            enhanced_path, _, _ = enhanced
+                            temp_files.append(enhanced_path)
+                            # Re-validate the enhanced image
+                            is_valid, reason = validator.validate(enhanced_path)
+                            if is_valid:
+                                logger.info(f"Enhancement rescued image: {img.url[:80]}")
+                                dl_path = enhanced_path
+                if not is_valid:
+                    result.error = f"Validation failed: {reason}"
+                    logger.info(f"Validation failed ({reason}): {img.url[:80]}")
+                    return result
 
             # Compress
             compress_result = self.compressor.compress(dl_path, job.source_name)

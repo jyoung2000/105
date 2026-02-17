@@ -31,6 +31,8 @@ DEFAULT_CONFIG = {
         "allowed_aspects": [],
         "allow_mobile": True,
         "watermark_detection": True,
+        "enhance_near_miss": True,
+        "max_enhance_upscale": 2.5,
     },
     "jpeg": {
         "quality": 85,
