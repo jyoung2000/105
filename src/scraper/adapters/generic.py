@@ -772,3 +772,85 @@ class GenericAdapter(BaseAdapter):
             height=height,
             page_url=page_url,
         )
+
+    def discover_categories(self, html: str, page_url: str) -> list[dict]:
+        """Find category, tag, and collection navigation links on a page.
+
+        These are gallery-type pages that likely contain more wallpapers.
+        Returns list of {"url": str, "label": str, "type": str}.
+        """
+        soup = BeautifulSoup(html, "lxml")
+        categories = []
+        seen = set()
+        page_parsed = urlparse(page_url)
+        page_root = self._root_domain(page_parsed.netloc)
+
+        # Patterns that suggest category/collection/tag navigation
+        cat_patterns = [
+            (r"/categor(y|ies)/", "category"),
+            (r"/tags?/", "tag"),
+            (r"/collections?/", "collection"),
+            (r"/gallery/", "gallery"),
+            (r"/album/", "collection"),
+            (r"/topic/", "category"),
+            (r"/genre/", "category"),
+            (r"/type/", "category"),
+            (r"/resolution/", "category"),
+        ]
+
+        # Also look for nav elements with wallpaper-related links
+        nav_keywords = {"nature", "landscape", "abstract", "anime", "gaming",
+                        "space", "city", "dark", "minimal", "car", "animal",
+                        "fantasy", "sci-fi", "movie", "art", "photography",
+                        "4k", "hd", "uhd", "popular", "trending", "newest",
+                        "latest", "top", "best", "random"}
+
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if not href or href.startswith("#") or href.startswith("javascript:"):
+                continue
+
+            abs_url = urljoin(page_url, href)
+            link_parsed = urlparse(abs_url)
+
+            # Must be same domain
+            link_root = self._root_domain(link_parsed.netloc)
+            if link_root != page_root:
+                continue
+
+            # Skip image file URLs
+            if self._is_image_url(abs_url):
+                continue
+
+            if abs_url in seen:
+                continue
+
+            path = link_parsed.path.lower()
+            text = link.get_text(strip=True).lower()
+
+            # Check against category URL patterns
+            for pattern, cat_type in cat_patterns:
+                if re.search(pattern, path):
+                    # Don't add the listing index itself (e.g., /categories/)
+                    if path.rstrip("/").count("/") >= 2:
+                        seen.add(abs_url)
+                        categories.append({
+                            "url": abs_url,
+                            "label": link.get_text(strip=True)[:50],
+                            "type": cat_type,
+                        })
+                    break
+
+            # Check for navigation links with wallpaper-related keywords
+            if abs_url not in seen and text:
+                text_words = set(text.split())
+                if text_words & nav_keywords and len(text) < 40:
+                    # This looks like a category/topic navigation link
+                    seen.add(abs_url)
+                    categories.append({
+                        "url": abs_url,
+                        "label": link.get_text(strip=True)[:50],
+                        "type": "category",
+                    })
+
+        return categories

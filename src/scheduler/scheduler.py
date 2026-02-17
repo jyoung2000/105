@@ -5,6 +5,7 @@ from src.scraper.engine import scraper_engine
 from src.scraper.discovery import discovery_engine
 from src.scheduler.source_manager import source_manager
 from src.storage.config_store import config_store
+from src.storage.site_profiles import site_profiles
 from src.utils.logging import setup_logging
 
 logger = setup_logging("scheduler")
@@ -189,10 +190,25 @@ class Scheduler:
                 break
 
             name = source.get("name", source.get("url", "unknown"))
-            logger.info(f"Scheduled scrape: {name}")
+
+            # Pick a URL for this scrape — use a fresh gallery/category page
+            # from the site profile if available, to get varied wallpapers
+            scrape_url = source["url"]
+            try:
+                profile = site_profiles.get(source["url"])
+                # Ensure the source's main URL is in the gallery rotation
+                profile.add_gallery_url(source["url"], source.get("name", "main"))
+                fresh_url = profile.get_fresh_gallery_url()
+                if fresh_url and fresh_url != source["url"]:
+                    logger.info(f"Using fresh gallery URL for {name}: {fresh_url}")
+                    scrape_url = fresh_url
+            except Exception:
+                pass
+
+            logger.info(f"Scheduled scrape: {name} -> {scrape_url}")
             try:
                 job = await scraper_engine.scrape_url(
-                    url=source["url"],
+                    url=scrape_url,
                     source_id=source["id"],
                     source_name=source.get("name", ""),
                     max_pages=source.get("max_pages", 10),

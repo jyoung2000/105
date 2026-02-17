@@ -14,7 +14,7 @@ logger = setup_logging("main")
 
 def _ensure_data_dirs():
     """Try to create data directories using the resolved base. Non-fatal."""
-    for sub in ["logs", "config", "temp", "wallpapers", "thumbnails"]:
+    for sub in ["logs", "config", "temp", "wallpapers", "thumbnails", "config/site_profiles"]:
         try:
             data_path(sub).mkdir(parents=True, exist_ok=True)
         except Exception as e:

@@ -16,6 +16,7 @@ from src.ai.captioner import AICaptioner
 from src.storage.baserow import BaserowClient
 from src.storage.config_store import config_store
 from src.storage.activity_store import ActivityStore, ActivityEntry, activity_store
+from src.storage.site_profiles import site_profiles
 from src.metadata.schemas import WallpaperMetadata
 from src.utils.aspect_ratio import calculate_aspect_ratio, is_mobile
 from src.utils.paths import data_path
@@ -186,6 +187,9 @@ class ScraperEngine:
         scroll_count = config_store.get("scraping", "scroll_count", default=5)
         scroll_wait = config_store.get("scraping", "scroll_wait_ms", default=800)
 
+        # Load site profile for this domain — remembers site structure
+        profile = site_profiles.get(job.url)
+
         current_url = job.url
         for page_num in range(1, job.max_pages + 1):
             logger.info(f"Scraping page {page_num}: {current_url}")
@@ -200,21 +204,42 @@ class ScraperEngine:
                 job.error_log.append(f"Page load failed: {e}")
                 break
 
+            # Discover categories/collections on the page for future variety
+            try:
+                cats = adapter.discover_categories(html, current_url)
+                if cats:
+                    profile.add_categories(cats)
+                    # Also register category URLs as gallery URLs for future visits
+                    for cat in cats:
+                        profile.add_gallery_url(cat["url"], cat.get("label", ""))
+                    logger.info(f"Discovered {len(cats)} category/collection links on {current_url}")
+            except Exception as e:
+                logger.debug(f"Category discovery error: {e}")
+
             # Check for detail page links FIRST — listing pages have thumbnails
             # linking to detail pages where full-size images live.
-            # If detail links exist, this is a gallery/listing page and we should
-            # follow links to detail pages for full-res images instead of downloading
-            # the listing page thumbnails (which are small/low-quality).
             detail_links = adapter.get_detail_page_links(html, current_url)
             if detail_links:
-                logger.info(f"Found {len(detail_links)} detail page links on page {page_num} — following for full-res images")
-                images = await self._scrape_detail_pages(
-                    detail_links, adapter, job, scroll_count, scroll_wait
-                )
-                logger.info(f"Got {len(images)} full-res images from detail pages")
+                # Filter out already-visited detail pages (save time on revisits)
+                fresh_links = [
+                    dl for dl in detail_links
+                    if not profile.is_visited(dl["url"])
+                ]
+                skipped = len(detail_links) - len(fresh_links)
+                if skipped > 0:
+                    logger.info(f"Skipping {skipped} already-visited detail pages")
+
+                if fresh_links:
+                    logger.info(f"Found {len(fresh_links)} fresh detail page links on page {page_num} — following for full-res images")
+                    images = await self._scrape_detail_pages(
+                        fresh_links, adapter, job, scroll_count, scroll_wait, profile
+                    )
+                    logger.info(f"Got {len(images)} full-res images from detail pages")
+                else:
+                    logger.info(f"All {len(detail_links)} detail links already visited — skipping")
+                    images = []
             else:
-                # No detail links — this might be a detail page itself, or a site
-                # that serves full-res images directly on listing pages
+                # No detail links — this might be a detail page itself
                 images = await adapter.scrape(html, current_url)
                 logger.info(f"Found {len(images)} direct images on page {page_num} (no detail links)")
 
@@ -247,7 +272,12 @@ class ScraperEngine:
                 next_url = await adapter.get_next_page_url(html, current_url, page_num)
                 if not next_url:
                     logger.info("No more pages found")
+                    # Update hints about pagination
+                    if page_num == 1:
+                        profile.update_hints(has_pagination=False)
                     break
+                else:
+                    profile.update_hints(has_pagination=True)
                 current_url = next_url
             except Exception:
                 break
@@ -255,8 +285,14 @@ class ScraperEngine:
             # Randomized delay between pages (2-4s)
             await asyncio.sleep(2 + random.random() * 2)
 
+        # Record gallery URL scrape stats and overall stats
+        profile.record_gallery_scrape(job.url, job.images_found)
+        profile.record_scrape_stats(job.images_found, job.images_uploaded)
+        profile.save()
+
     async def _scrape_detail_pages(self, detail_links: list[dict], adapter, job: ScrapeJob,
-                                    scroll_count: int, scroll_wait: int) -> list:
+                                    scroll_count: int, scroll_wait: int,
+                                    profile=None) -> list:
         """Visit individual detail/wallpaper pages to find full-size images."""
         all_images = []
         max_details = config_store.get("scraping", "max_pages", default=10)
@@ -271,6 +307,11 @@ class ScraperEngine:
                     detail_url, scroll_count=min(scroll_count, 3), scroll_wait_ms=scroll_wait
                 )
                 images = await adapter.scrape(html, detail_url)
+
+                # Mark page as visited in site profile
+                if profile:
+                    profile.mark_visited(detail_url)
+
                 if images:
                     # Carry forward metadata from the thumbnail link
                     for img in images:
@@ -280,6 +321,10 @@ class ScraperEngine:
                             img.title = link_info["title"]
                     all_images.extend(images)
                     logger.info(f"Found {len(images)} images on detail page {detail_url}")
+
+                    # Record hints about what worked on this site
+                    if profile:
+                        profile.update_hints(has_download_buttons=True)
                 else:
                     logger.debug(f"No images found on detail page {detail_url}")
             except Exception as e:
@@ -288,6 +333,10 @@ class ScraperEngine:
 
             # Randomized delay between detail pages (1-3s)
             await asyncio.sleep(1 + random.random() * 2)
+
+        # Batch save visited pages
+        if profile:
+            profile.save()
 
         return all_images
 

@@ -15,7 +15,7 @@ THUMBNAIL_DIR = data_path("thumbnails")
 class ImageCompressor:
     """Compress images to JPEG and generate thumbnails."""
 
-    def __init__(self, quality: int = 85, thumbnail_size: int = 200, thumbnail_quality: int = 60):
+    def __init__(self, quality: int = 85, thumbnail_size: int = 400, thumbnail_quality: int = 80):
         self.quality = quality
         self.thumbnail_size = thumbnail_size
         self.thumbnail_quality = thumbnail_quality
@@ -58,7 +58,7 @@ class ImageCompressor:
             return None
 
     def generate_thumbnail(self, input_path: Path, img_hash: str) -> Optional[str]:
-        """Generate a 200x200 thumbnail. Returns relative path or None."""
+        """Generate a thumbnail (default 400px). Returns relative path or None."""
         try:
             THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
             thumb_path = THUMBNAIL_DIR / f"{img_hash}.jpg"
