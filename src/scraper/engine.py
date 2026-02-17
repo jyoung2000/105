@@ -289,14 +289,16 @@ class ScraperEngine:
 
                 if fresh_links:
                     logger.info(f"Found {len(fresh_links)} fresh detail page links on page {page_num} — following for full-res images")
-                    images = await self._scrape_detail_pages(
-                        fresh_links, adapter, job, scroll_count, scroll_wait,
-                        profile, gallery_url=current_url
+                    # Process images immediately as each detail page is scraped
+                    # (instead of collecting all first, then processing)
+                    await self._scrape_and_process_detail_pages(
+                        fresh_links, adapter, job, validator,
+                        scroll_count, scroll_wait,
+                        profile, gallery_url=current_url,
+                        job_seen_urls=job_seen_urls,
                     )
-                    logger.info(f"Got {len(images)} full-res images from detail pages")
                 else:
                     logger.info(f"All {len(detail_links)} detail links already visited — skipping")
-                    images = []
             else:
                 # No detail links — this might be a detail page itself
                 allow_nsfw = config_store.get("scraping", "allow_nsfw", default=False)
@@ -315,36 +317,36 @@ class ScraperEngine:
                         ]
                     logger.info(f"Found {len(images)} direct images on page {page_num} (no detail links)")
 
-            job.images_found += len(images)
+                job.images_found += len(images)
 
-            # Process images (skip already-seen URLs within this job)
-            for i, img in enumerate(images):
-                norm_url = self._normalize_image_url(img.url)
-                if norm_url in job_seen_urls:
-                    logger.debug(f"Skipping already-processed image in this job: {img.url[:80]}")
-                    job.duplicates += 1
-                    continue
-                job_seen_urls.add(norm_url)
-
-                try:
-                    result = await self._process_image(img, job, validator)
-                    if result.status == "uploaded":
-                        job.images_uploaded += 1
-                    elif result.status == "duplicate":
+                # Process images (skip already-seen URLs within this job)
+                for i, img in enumerate(images):
+                    norm_url = self._normalize_image_url(img.url)
+                    if norm_url in job_seen_urls:
+                        logger.debug(f"Skipping already-processed image in this job: {img.url[:80]}")
                         job.duplicates += 1
-                    elif result.status == "error":
-                        job.errors += 1
-                        if result.error:
-                            logger.debug(f"Image skip: {result.error} - {img.url[:80]}")
-                except Exception as e:
-                    logger.error(f"Image processing error: {e}")
-                    job.errors += 1
-                    job.error_log.append(f"Image error: {e}")
+                        continue
+                    job_seen_urls.add(norm_url)
 
-                # Update progress
-                total_expected = job.images_found
-                done = job.images_uploaded + job.duplicates + job.errors
-                job.progress = min(95.0, (done / max(total_expected, 1)) * 100)
+                    try:
+                        result = await self._process_image(img, job, validator)
+                        if result.status == "uploaded":
+                            job.images_uploaded += 1
+                        elif result.status == "duplicate":
+                            job.duplicates += 1
+                        elif result.status == "error":
+                            job.errors += 1
+                            if result.error:
+                                logger.debug(f"Image skip: {result.error} - {img.url[:80]}")
+                    except Exception as e:
+                        logger.error(f"Image processing error: {e}")
+                        job.errors += 1
+                        job.error_log.append(f"Image error: {e}")
+
+                    # Update progress
+                    total_expected = job.images_found
+                    done = job.images_uploaded + job.duplicates + job.errors
+                    job.progress = min(95.0, (done / max(total_expected, 1)) * 100)
 
             # Try to find next page
             try:
@@ -394,19 +396,25 @@ class ScraperEngine:
             return True
         return False
 
-    async def _scrape_detail_pages(self, detail_links: list[dict], adapter, job: ScrapeJob,
-                                    scroll_count: int, scroll_wait: int,
-                                    profile=None, gallery_url: str = "") -> list:
-        """Visit individual detail/wallpaper pages to find full-size images.
+    async def _scrape_and_process_detail_pages(
+        self, detail_links: list[dict], adapter, job: ScrapeJob,
+        validator: ImageValidator, scroll_count: int, scroll_wait: int,
+        profile=None, gallery_url: str = "", job_seen_urls: set = None,
+    ):
+        """Visit detail pages and process each wallpaper immediately upon discovery.
+
+        Instead of collecting all images first then processing, this method
+        downloads/validates/uploads each wallpaper right after finding it on
+        the detail page. This means the user sees results appear in real-time
+        rather than waiting for all detail pages to be visited first.
 
         Uses the gallery URL as referer (like clicking a thumbnail on the listing page).
-        Includes adaptive back-off: if consecutive pages return 0 images (likely
-        blocked), the delay between requests increases to avoid triggering anti-bot.
-        Deduplicates images across detail pages so each unique image URL is only
-        returned once, at its highest resolution.
+        Includes adaptive back-off if consecutive pages return 0 images.
+        Deduplicates images across detail pages via job_seen_urls.
         """
-        all_images = []
-        seen_image_urls = set()  # Track image URLs across all detail pages
+        if job_seen_urls is None:
+            job_seen_urls = set()
+
         allow_nsfw = config_store.get("scraping", "allow_nsfw", default=False)
         max_details = config_store.get("scraping", "max_pages", default=10)
         # Limit detail pages per listing page to avoid runaway scraping
@@ -419,8 +427,6 @@ class ScraperEngine:
             detail_url = link_info["url"]
             try:
                 logger.info(f"Visiting detail page {i+1}/{len(links_to_visit)}: {detail_url}")
-                # Use more scrolls on detail pages to trigger lazy-loading
-                # (collection pages can have many images below the fold)
                 html = await browser_manager.get_page_content(
                     detail_url, scroll_count=max(scroll_count, 8),
                     scroll_wait_ms=scroll_wait,
@@ -439,7 +445,6 @@ class ScraperEngine:
                             f"{consecutive_failures} consecutive blocked pages"
                         )
                         break
-                    # Back off significantly before trying next page
                     backoff = base_delay * (2 ** consecutive_failures) + random.random() * 3
                     logger.info(f"Backing off {backoff:.1f}s before next detail page")
                     await asyncio.sleep(backoff)
@@ -460,13 +465,13 @@ class ScraperEngine:
 
                 if images:
                     consecutive_failures = 0  # Reset on success
-                    # Deduplicate: skip images whose base URL we've already seen
-                    # from another detail page (same wallpaper, different page)
-                    unique_images = []
+
+                    # Deduplicate, filter NSFW, and process each image immediately
                     for img in images:
                         base_url = self._normalize_image_url(img.url)
-                        if base_url in seen_image_urls:
-                            logger.debug(f"Skipping duplicate image across detail pages: {img.url[:80]}")
+                        if base_url in job_seen_urls:
+                            logger.debug(f"Skipping duplicate image: {img.url[:80]}")
+                            job.duplicates += 1
                             continue
                         # NSFW image check
                         if not allow_nsfw and is_nsfw_image(
@@ -475,15 +480,36 @@ class ScraperEngine:
                         ):
                             logger.info(f"Skipping NSFW image: {img.url[:80]}")
                             continue
-                        seen_image_urls.add(base_url)
+                        job_seen_urls.add(base_url)
+
                         # Carry forward metadata from the thumbnail link
                         if not img.alt and link_info.get("alt"):
                             img.alt = link_info["alt"]
                         if not img.title and link_info.get("title"):
                             img.title = link_info["title"]
-                        unique_images.append(img)
-                    all_images.extend(unique_images)
-                    logger.info(f"Found {len(unique_images)} unique images on detail page {detail_url} ({len(images) - len(unique_images)} duplicates skipped)")
+
+                        # Process immediately — download, validate, caption, upload
+                        job.images_found += 1
+                        try:
+                            result = await self._process_image(img, job, validator)
+                            if result.status == "uploaded":
+                                job.images_uploaded += 1
+                                logger.info(f"Wallpaper uploaded from {detail_url}")
+                            elif result.status == "duplicate":
+                                job.duplicates += 1
+                            elif result.status == "error":
+                                job.errors += 1
+                                if result.error:
+                                    logger.debug(f"Image skip: {result.error} - {img.url[:80]}")
+                        except Exception as e:
+                            logger.error(f"Image processing error: {e}")
+                            job.errors += 1
+                            job.error_log.append(f"Image error: {e}")
+
+                        # Update progress
+                        total_expected = max(job.images_found, len(links_to_visit))
+                        done = job.images_uploaded + job.duplicates + job.errors
+                        job.progress = min(95.0, (done / max(total_expected, 1)) * 100)
 
                     # Record hints about what worked on this site
                     if profile:
@@ -511,8 +537,6 @@ class ScraperEngine:
         # Batch save visited pages
         if profile:
             profile.save()
-
-        return all_images
 
     async def _process_image(self, img, job: ScrapeJob, validator: ImageValidator = None) -> ScrapeResult:
         """Process a single image through the full pipeline."""
