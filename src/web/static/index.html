@@ -18,6 +18,7 @@
             <div class="nav-tab" data-tab="baserow">Baserow</div>
             <div class="nav-tab" data-tab="browse">Browse</div>
             <div class="nav-tab" data-tab="stats">Stats</div>
+            <div class="nav-tab" data-tab="logs">Logs</div>
         </div>
         <div class="nav-status" id="nav-status"></div>
     </nav>
@@ -140,6 +141,7 @@
             <table>
                 <thead>
                     <tr>
+                        <th style="width:30px"></th>
                         <th>Enabled</th>
                         <th>Status</th>
                         <th>Name</th>
@@ -410,6 +412,34 @@
             <div class="card">
                 <div class="card-title">Discovery Statistics</div>
                 <div id="stats-discovery"></div>
+            </div>
+        </div>
+
+        <!-- ==================== Logs ==================== -->
+        <div id="tab-logs" class="tab-content">
+            <div class="logs-toolbar">
+                <select id="logs-level-filter" onchange="loadLogs()">
+                    <option value="">All Levels</option>
+                    <option value="DEBUG">Debug</option>
+                    <option value="INFO">Info</option>
+                    <option value="WARNING">Warning</option>
+                    <option value="ERROR">Error</option>
+                    <option value="CRITICAL">Critical</option>
+                </select>
+                <select id="logs-line-count" onchange="loadLogs()">
+                    <option value="100">100 lines</option>
+                    <option value="200" selected>200 lines</option>
+                    <option value="500">500 lines</option>
+                    <option value="1000">1000 lines</option>
+                </select>
+                <label class="log-auto-scroll">
+                    <input type="checkbox" id="logs-auto-scroll" checked> Auto-scroll
+                </label>
+                <button class="btn btn-sm btn-secondary" onclick="loadLogs()">Refresh</button>
+                <span id="logs-total" style="font-size:12px;color:var(--text-muted);margin-left:auto"></span>
+            </div>
+            <div class="log-viewer" id="logs-container">
+                <div style="color:var(--text-muted);padding:2rem;text-align:center">Loading logs...</div>
             </div>
         </div>
     </div>

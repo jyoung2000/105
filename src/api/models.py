@@ -24,6 +24,10 @@ class SourceUpdate(BaseModel):
     notes: Optional[str] = None
 
 
+class SourceReorder(BaseModel):
+    source_ids: list[str]
+
+
 class QueryCreate(BaseModel):
     query: str
 

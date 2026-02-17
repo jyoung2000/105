@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
 import httpx
 from src.api.models import (
-    ScrapeRequest, SourceCreate, SourceUpdate,
+    ScrapeRequest, SourceCreate, SourceUpdate, SourceReorder,
     QueryCreate, QueryUpdate, BaserowConfig,
     FieldMappingUpdate, SettingsUpdate,
 )
@@ -150,6 +150,12 @@ async def create_source(data: SourceCreate):
         schedule_hours=data.schedule_hours,
     )
     return source
+
+
+@router.put("/sources/reorder")
+async def reorder_sources(data: SourceReorder):
+    source_manager.reorder_sources(data.source_ids)
+    return {"status": "reordered"}
 
 
 @router.put("/sources/{source_id}")
@@ -584,3 +590,29 @@ async def get_stats():
         "total_sources": len(sources),
         "enabled_sources": len([s for s in sources if s.get("enabled")]),
     }
+
+
+# === Logs ===
+
+@router.get("/logs")
+async def get_logs(lines: int = 200, level: str = ""):
+    """Return recent log lines from the scraper log file."""
+    log_file = data_path("logs") / "scraper.log"
+    if not log_file.exists():
+        return {"lines": [], "total": 0, "file": str(log_file)}
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        # Filter by level if specified
+        if level:
+            level_upper = level.upper()
+            all_lines = [l for l in all_lines if f"| {level_upper}" in l]
+        # Return last N lines
+        recent = all_lines[-lines:]
+        return {
+            "lines": [l.rstrip("\n") for l in recent],
+            "total": len(all_lines),
+            "file": str(log_file),
+        }
+    except Exception as e:
+        return {"lines": [f"Error reading logs: {e}"], "total": 0, "file": str(log_file)}

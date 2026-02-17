@@ -268,6 +268,29 @@ class SourceManager:
                 return s
         return None
 
+    def reorder_sources(self, source_ids: list[str]) -> bool:
+        """Reorder sources to match the given list of IDs.
+
+        Any sources not in the list are appended at the end in their
+        current relative order.
+        """
+        if not self._loaded:
+            self.load()
+        by_id = {s["id"]: s for s in self._sources}
+        reordered = []
+        seen = set()
+        for sid in source_ids:
+            if sid in by_id and sid not in seen:
+                reordered.append(by_id[sid])
+                seen.add(sid)
+        # Append any sources not included in the request
+        for s in self._sources:
+            if s["id"] not in seen:
+                reordered.append(s)
+        self._sources = reordered
+        self.save()
+        return True
+
     @staticmethod
     def _normalize_domain(domain: str) -> str:
         """Normalize domain for comparison (strip www., lowercase)."""

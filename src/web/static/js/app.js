@@ -30,6 +30,7 @@ function onTabSwitch(tab) {
     if (tab === 'baserow') { loadBaserowConfig(); }
     if (tab === 'browse') { loadBrowse(); }
     if (tab === 'stats') { loadStats(); }
+    if (tab === 'logs') { loadLogs(); startLogsPolling(); }
 }
 
 function stopPolling() {
@@ -37,6 +38,7 @@ function stopPolling() {
     if (jobsPolling) { clearInterval(jobsPolling); jobsPolling = null; }
     if (sourcesPolling) { clearInterval(sourcesPolling); sourcesPolling = null; }
     if (typeof scrapePolling !== 'undefined' && scrapePolling) { clearInterval(scrapePolling); scrapePolling = null; }
+    if (typeof logsPolling !== 'undefined' && logsPolling) { clearInterval(logsPolling); logsPolling = null; }
 }
 
 // ==================== GLOBAL STATUS (always running) ====================
@@ -388,11 +390,15 @@ async function loadSources() {
         const data = await api('/api/sources');
         const tbody = document.getElementById('sources-table');
         if (!data.sources || data.sources.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted)">No sources configured. Add sources or wait for discovery.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No sources configured. Add sources or wait for discovery.</td></tr>';
             return;
         }
         tbody.innerHTML = data.sources.map(s => `
-            <tr>
+            <tr draggable="true" data-source-id="${s.id}"
+                ondragstart="onSourceDragStart(event)" ondragend="onSourceDragEnd(event)"
+                ondragover="onSourceDragOver(event)" ondrop="onSourceDrop(event)"
+                ondragleave="onSourceDragLeave(event)">
+                <td><span class="drag-handle" title="Drag to reorder">&#9776;</span></td>
                 <td><label class="toggle"><input type="checkbox" ${s.enabled ? 'checked' : ''} onchange="toggleSource('${s.id}')"><span class="toggle-slider"></span></label></td>
                 <td><span class="badge badge-idle" id="source-status-${s.id}">idle</span></td>
                 <td>${esc(s.name)}<br><span style="font-size:11px;color:var(--text-muted)">${esc(s.domain || '')}</span></td>
@@ -411,6 +417,86 @@ async function loadSources() {
         // Immediately populate live status badges
         loadLiveStatus();
     } catch (e) {}
+}
+
+// ==================== DRAG & DROP (SOURCE REORDER) ====================
+let dragSourceId = null;
+
+function onSourceDragStart(e) {
+    const row = e.target.closest('tr');
+    if (!row) return;
+    dragSourceId = row.dataset.sourceId;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', dragSourceId);
+}
+
+function onSourceDragEnd(e) {
+    const row = e.target.closest('tr');
+    if (row) row.classList.remove('dragging');
+    // Clean up all drag-over highlights
+    document.querySelectorAll('tr.drag-over').forEach(r => r.classList.remove('drag-over'));
+    dragSourceId = null;
+}
+
+function onSourceDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const row = e.target.closest('tr');
+    if (row && row.dataset.sourceId !== dragSourceId) {
+        row.classList.add('drag-over');
+    }
+}
+
+function onSourceDragLeave(e) {
+    const row = e.target.closest('tr');
+    if (row) row.classList.remove('drag-over');
+}
+
+function onSourceDrop(e) {
+    e.preventDefault();
+    const targetRow = e.target.closest('tr');
+    if (!targetRow) return;
+    targetRow.classList.remove('drag-over');
+
+    const targetId = targetRow.dataset.sourceId;
+    if (!targetId || targetId === dragSourceId) return;
+
+    // Reorder the DOM rows, then save new order
+    const tbody = document.getElementById('sources-table');
+    const rows = Array.from(tbody.querySelectorAll('tr[data-source-id]'));
+    const ids = rows.map(r => r.dataset.sourceId);
+
+    const fromIdx = ids.indexOf(dragSourceId);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+
+    // Move the dragged id to the target position
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, dragSourceId);
+
+    // Visually reorder the rows
+    const draggedRow = rows[fromIdx];
+    if (fromIdx < toIdx) {
+        tbody.insertBefore(draggedRow, targetRow.nextSibling);
+    } else {
+        tbody.insertBefore(draggedRow, targetRow);
+    }
+
+    saveSourceOrder(ids);
+}
+
+async function saveSourceOrder(sourceIds) {
+    try {
+        await api('/api/sources/reorder', {
+            method: 'PUT',
+            body: { source_ids: sourceIds }
+        });
+        toast('Source order saved', 'success');
+    } catch (e) {
+        toast('Failed to save order', 'error');
+        loadSources(); // Reload to reset order
+    }
 }
 
 async function toggleSource(id) {
@@ -1329,6 +1415,64 @@ document.addEventListener('keydown', (e) => {
         }
     }
 });
+
+// ==================== LOGS VIEWER ====================
+let logsPolling = null;
+
+function startLogsPolling() {
+    logsPolling = setInterval(loadLogs, 5000);
+}
+
+async function loadLogs() {
+    const level = document.getElementById('logs-level-filter').value;
+    const lines = document.getElementById('logs-line-count').value;
+    let url = `/api/logs?lines=${lines}`;
+    if (level) url += `&level=${encodeURIComponent(level)}`;
+
+    try {
+        const data = await api(url);
+        const container = document.getElementById('logs-container');
+        const totalEl = document.getElementById('logs-total');
+
+        if (totalEl) totalEl.textContent = `${data.total || 0} total lines`;
+
+        if (!data.lines || data.lines.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-muted);padding:2rem;text-align:center">No log entries found</div>';
+            return;
+        }
+
+        container.innerHTML = data.lines.map(line => {
+            const parsed = parseLogLine(line);
+            return `<div class="log-line ${parsed.levelClass}">${parsed.html}</div>`;
+        }).join('');
+
+        // Auto-scroll to bottom
+        const autoScroll = document.getElementById('logs-auto-scroll');
+        if (autoScroll && autoScroll.checked) {
+            container.scrollTop = container.scrollHeight;
+        }
+    } catch (e) {
+        const container = document.getElementById('logs-container');
+        container.innerHTML = `<div style="color:var(--error);padding:2rem;text-align:center">Failed to load logs: ${esc(e.message)}</div>`;
+    }
+}
+
+function parseLogLine(line) {
+    // Log format: 2024-01-15 12:30:45,123 | INFO     | scraper.engine | Some message
+    const match = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[,\.]\d+)\s*\|\s*(\w+)\s*\|\s*([^\|]+)\|\s*(.*)/);
+    if (match) {
+        const timestamp = match[1];
+        const level = match[2].trim();
+        const name = match[3].trim();
+        const message = match[4];
+        const levelLower = level.toLowerCase();
+        const levelClass = 'log-level-' + levelLower;
+        const html = `<span class="log-timestamp">${esc(timestamp)}</span> | <span class="${levelClass}">${esc(level.padEnd(8))}</span> | <span class="log-name">${esc(name)}</span> | ${esc(message)}`;
+        return { html, levelClass };
+    }
+    // Unstructured line — return as-is
+    return { html: esc(line), levelClass: '' };
+}
 
 // === Init ===
 window.addEventListener('DOMContentLoaded', () => {

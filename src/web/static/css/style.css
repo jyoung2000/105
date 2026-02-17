@@ -1147,6 +1147,83 @@ tr:hover td { background: var(--bg-hover); }
 }
 
 /* ===================================================================
+   Drag and drop — source reordering
+   =================================================================== */
+.drag-handle {
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 16px;
+    padding: 0 0.25rem;
+    user-select: none;
+    transition: color 0.15s var(--ease);
+    line-height: 1;
+}
+.drag-handle:hover { color: var(--text-secondary); }
+.drag-handle:active { cursor: grabbing; }
+
+tr.dragging {
+    opacity: 0.4;
+    background: var(--bg-active) !important;
+}
+tr.dragging td { background: transparent !important; }
+
+tr.drag-over td {
+    border-top: 2px solid var(--accent) !important;
+}
+
+/* ===================================================================
+   Logs viewer
+   =================================================================== */
+.log-viewer {
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-family: 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow: auto;
+    max-height: 70vh;
+    padding: 1rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text-secondary);
+}
+
+.log-line {
+    padding: 1px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+.log-line:hover {
+    background: var(--bg-hover);
+}
+
+.log-level-debug { color: var(--text-muted); }
+.log-level-info  { color: var(--text-secondary); }
+.log-level-warning { color: var(--orange); }
+.log-level-error { color: var(--error); }
+.log-level-critical { color: var(--error); font-weight: 700; }
+
+.log-timestamp { color: var(--text-muted); }
+.log-name { color: var(--accent); }
+
+.logs-toolbar {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.log-auto-scroll {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 12px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+}
+
+/* ===================================================================
    Responsive
    =================================================================== */
 @media (max-width: 1024px) {
