@@ -421,9 +421,8 @@ h3 {
 
 /* Gallery grid */
 .gallery-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 0.75rem;
+    columns: 4 180px;
+    column-gap: 0.75rem;
 }
 
 .gallery-item {
@@ -431,9 +430,10 @@ h3 {
     border-radius: var(--radius-md);
     overflow: hidden;
     cursor: pointer;
-    aspect-ratio: 1;
     background: var(--bg-elevated);
     transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease);
+    break-inside: avoid;
+    margin-bottom: 0.75rem;
 }
 .gallery-item:hover {
     transform: scale(1.03);
@@ -442,11 +442,12 @@ h3 {
 
 .gallery-item img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: auto;
+    display: block;
+    border-radius: var(--radius-md);
     transition: transform 0.4s var(--ease);
 }
-.gallery-item:hover img { transform: scale(1.08); }
+.gallery-item:hover img { transform: scale(1.05); }
 
 .gallery-selected {
     outline: 2px solid var(--accent);
@@ -504,9 +505,8 @@ h3 {
 }
 
 .browse-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 0.75rem;
+    columns: 4 240px;
+    column-gap: 0.75rem;
 }
 
 .browse-item {
@@ -514,9 +514,10 @@ h3 {
     border-radius: var(--radius-md);
     overflow: hidden;
     cursor: pointer;
-    aspect-ratio: 16/10;
     background: var(--bg-elevated);
     transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease);
+    break-inside: avoid;
+    margin-bottom: 0.75rem;
 }
 .browse-item:hover {
     transform: translateY(-4px);
@@ -525,11 +526,20 @@ h3 {
 
 .browse-item img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: auto;
+    display: block;
+    border-radius: var(--radius-md);
     transition: transform 0.4s var(--ease);
 }
-.browse-item:hover img { transform: scale(1.06); }
+.browse-item:hover img { transform: scale(1.04); }
+
+.browse-selected {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    box-shadow: var(--shadow-glow);
+}
+.browse-selected img { transform: scale(1.03); }
+.browse-selected .browse-overlay { opacity: 1; }
 
 .browse-overlay {
     position: absolute;
@@ -1244,8 +1254,8 @@ tr.drag-over td {
         --content-padding: 1rem;
         --nav-height: 48px;
     }
-    .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
-    .browse-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+    .gallery-grid { columns: 2 140px; }
+    .browse-grid { columns: 2 160px; }
     .settings-grid-2, .settings-grid-3 { grid-template-columns: 1fr; }
     .nav-brand { display: none; }
 }

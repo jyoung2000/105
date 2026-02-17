@@ -22,6 +22,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 
 function onTabSwitch(tab) {
     stopPolling();
+    navSelectedIdx = -1; navItems = []; navActiveTab = '';
     if (tab === 'gallery') { loadGallerySummary(); loadGallery(); startGalleryPolling(); }
     if (tab === 'scrape') { checkBaserowStatus(); loadScrapeJobs(); startScrapePolling(); }
     if (tab === 'sources') { loadSources(); loadQueries(); loadSchedulerStatus(); loadLiveStatus(); startSourcesPolling(); }
@@ -1161,14 +1162,14 @@ function browseFileUrl(file) {
 
 function browseThumbnailUrl(row) {
     // Primary: use direct file endpoint (most reliable for Docker setups).
-    // Tries thumbnail variants first, then full image.
+    // Prefer card_cover (largest Baserow thumbnail) for clarity, then full image.
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
     const file = fileField[0];
 
-    // Try Baserow thumbnail variants via direct endpoint
+    // Try Baserow thumbnail variants via direct endpoint — prefer largest first
     if (file.thumbnails) {
-        const thumb = file.thumbnails.small || file.thumbnails.tiny || file.thumbnails.card_cover;
+        const thumb = file.thumbnails.card_cover || file.thumbnails.small;
         if (thumb && thumb.url) return directFileUrl(thumb.url);
     }
 
@@ -1241,7 +1242,7 @@ function handleBrowseImgError(img, rowId, idx) {
         const fileField = browseField(row, 'imageFile');
         if (fileField && Array.isArray(fileField) && fileField.length > 0) {
             const file = fileField[0];
-            const thumbObj = file.thumbnails && (file.thumbnails.small || file.thumbnails.tiny);
+            const thumbObj = file.thumbnails && (file.thumbnails.card_cover || file.thumbnails.small);
             const tryUrl = thumbObj ? proxyImgUrl(thumbObj.url) : proxyImgUrl(browseFileUrl(file));
             if (tryUrl && tryUrl !== img.src) { img.src = tryUrl; return; }
         }
@@ -1455,43 +1456,58 @@ function esc(s) {
     return div.innerHTML;
 }
 
-// ==================== ARROW KEY GALLERY NAVIGATION ====================
-let galleryEntries = [];   // Cached entry IDs for keyboard navigation
-let gallerySelectedIdx = -1; // Currently selected gallery item index
+// ==================== ARROW KEY NAVIGATION (Gallery + Browse) ====================
+// Generic grid keyboard navigation — works on any tab with grid items.
+let navItems = [];       // Cached grid items for keyboard navigation
+let navSelectedIdx = -1; // Currently selected item index
+let navActiveTab = '';   // Which tab navigation is active on
 
-// Update cached entries when gallery renders
-function updateGalleryEntries() {
-    const items = document.querySelectorAll('.gallery-item');
-    galleryEntries = Array.from(items);
-    // Clear selection if gallery was reloaded
-    gallerySelectedIdx = -1;
+// Configuration per tab: item selector, selected class
+const NAV_CONFIG = {
+    gallery: { selector: '.gallery-item', selectedClass: 'gallery-selected' },
+    browse:  { selector: '.browse-item',  selectedClass: 'browse-selected' },
+};
+
+function updateNavItems(tab) {
+    const config = NAV_CONFIG[tab];
+    if (!config) { navItems = []; return; }
+    navItems = Array.from(document.querySelectorAll(config.selector));
+    if (navActiveTab !== tab) {
+        navSelectedIdx = -1;
+        navActiveTab = tab;
+    }
 }
 
-function selectGalleryItem(idx) {
-    if (galleryEntries.length === 0) return;
-    // Clamp index
-    idx = Math.max(0, Math.min(idx, galleryEntries.length - 1));
+function selectNavItem(idx, tab) {
+    if (navItems.length === 0) return;
+    const config = NAV_CONFIG[tab];
+    if (!config) return;
 
-    // Remove previous selection highlight
-    if (gallerySelectedIdx >= 0 && gallerySelectedIdx < galleryEntries.length) {
-        galleryEntries[gallerySelectedIdx].classList.remove('gallery-selected');
+    idx = Math.max(0, Math.min(idx, navItems.length - 1));
+
+    // Remove previous selection
+    if (navSelectedIdx >= 0 && navSelectedIdx < navItems.length) {
+        navItems[navSelectedIdx].classList.remove(config.selectedClass);
     }
 
-    gallerySelectedIdx = idx;
-    const item = galleryEntries[idx];
-    item.classList.add('gallery-selected');
-
-    // Scroll item into view smoothly
+    navSelectedIdx = idx;
+    const item = navItems[idx];
+    item.classList.add(config.selectedClass);
     item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
 }
 
+function getActiveNavTab() {
+    for (const tab of Object.keys(NAV_CONFIG)) {
+        const el = document.getElementById('tab-' + tab);
+        if (el && el.classList.contains('active')) return tab;
+    }
+    return null;
+}
+
 document.addEventListener('keydown', (e) => {
-    // Only handle arrow keys when gallery tab is active and no modal is open
-    const galleryTab = document.getElementById('tab-gallery');
-    if (!galleryTab || !galleryTab.classList.contains('active')) return;
+    // Modal: Escape closes it
     const modal = document.getElementById('modal-overlay');
     if (modal && modal.classList.contains('active')) {
-        // In modal: Escape closes it
         if (e.key === 'Escape') { closeModal(); e.preventDefault(); }
         return;
     }
@@ -1499,28 +1515,23 @@ document.addEventListener('keydown', (e) => {
     // Don't intercept when typing in inputs
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
 
-    updateGalleryEntries();
-    if (galleryEntries.length === 0) return;
+    // Determine which navigable tab is active
+    const tab = getActiveNavTab();
+    if (!tab) return;
+
+    updateNavItems(tab);
+    if (navItems.length === 0) return;
 
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
-        if (gallerySelectedIdx < 0) {
-            selectGalleryItem(0);
-        } else {
-            selectGalleryItem(gallerySelectedIdx + 1);
-        }
+        selectNavItem(navSelectedIdx < 0 ? 0 : navSelectedIdx + 1, tab);
     } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        if (gallerySelectedIdx < 0) {
-            selectGalleryItem(0);
-        } else {
-            selectGalleryItem(gallerySelectedIdx - 1);
-        }
+        selectNavItem(navSelectedIdx < 0 ? 0 : navSelectedIdx - 1, tab);
     } else if (e.key === 'Enter') {
-        // Open detail view for selected item
-        if (gallerySelectedIdx >= 0 && gallerySelectedIdx < galleryEntries.length) {
+        if (navSelectedIdx >= 0 && navSelectedIdx < navItems.length) {
             e.preventDefault();
-            galleryEntries[gallerySelectedIdx].click();
+            navItems[navSelectedIdx].click();
         }
     }
 });
