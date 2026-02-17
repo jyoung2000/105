@@ -595,6 +595,7 @@ async function loadSettings() {
                 cb.checked = allowedAspects.includes(cb.value);
             });
             document.getElementById('set-allow-mobile').checked = data.scraping.allow_mobile !== false;
+            document.getElementById('set-watermark-detection').checked = data.scraping.watermark_detection !== false;
         }
         if (data.jpeg) document.getElementById('set-jpeg-quality').value = data.jpeg.quality || 85;
         if (data.scheduler) document.getElementById('set-check-interval').value = data.scheduler.check_interval_minutes || 5;
@@ -618,6 +619,7 @@ async function saveSettings() {
                     max_concurrent_downloads: parseInt(document.getElementById('set-max-dl').value),
                     allowed_aspects: Array.from(document.querySelectorAll('.aspect-cb:checked')).map(cb => cb.value),
                     allow_mobile: document.getElementById('set-allow-mobile').checked,
+                    watermark_detection: document.getElementById('set-watermark-detection').checked,
                 },
                 jpeg: { quality: parseInt(document.getElementById('set-jpeg-quality').value) },
                 scheduler: { check_interval_minutes: parseInt(document.getElementById('set-check-interval').value) },

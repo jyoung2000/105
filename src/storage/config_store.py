@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
         "scroll_wait_ms": 800,
         "allowed_aspects": [],
         "allow_mobile": True,
+        "watermark_detection": True,
     },
     "jpeg": {
         "quality": 85,

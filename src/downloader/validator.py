@@ -16,11 +16,13 @@ class ImageValidator:
     """Validate downloaded images meet wallpaper criteria."""
 
     def __init__(self, min_width: int = MIN_WIDTH, min_height: int = MIN_HEIGHT,
-                 allowed_aspects: List[str] = None, allow_mobile: bool = True):
+                 allowed_aspects: List[str] = None, allow_mobile: bool = True,
+                 watermark_detection: bool = True):
         self.min_width = min_width
         self.min_height = min_height
         self.allowed_aspects = allowed_aspects or []
         self.allow_mobile = allow_mobile
+        self.watermark_detection = watermark_detection
 
     def validate(self, file_path: Path) -> Tuple[bool, str]:
         """Validate an image file. Returns (is_valid, reason)."""
@@ -54,10 +56,11 @@ class ImageValidator:
                 if aspect != "unknown" and aspect not in self.allowed_aspects:
                     return False, f"Aspect ratio {aspect} not in allowed list"
 
-            # Watermark detection
-            has_watermark, wm_reason = self._detect_watermark(img)
-            if has_watermark:
-                return False, f"Watermark detected: {wm_reason}"
+            # Watermark detection (can be disabled via settings)
+            if self.watermark_detection:
+                has_watermark, wm_reason = self._detect_watermark(img)
+                if has_watermark:
+                    return False, f"Watermark detected: {wm_reason}"
 
             return True, "OK"
 

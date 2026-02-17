@@ -1,29 +1,54 @@
 """Aspect ratio utilities for wallpaper classification."""
 from math import gcd
 
+# Known aspect ratios as (w, h) tuples and their labels
+KNOWN_RATIOS = [
+    (16, 9, "16:9"),
+    (16, 10, "16:10"),
+    (4, 3, "4:3"),
+    (21, 9, "21:9"),
+    (32, 9, "32:9"),
+    (3, 2, "3:2"),
+    (5, 4, "5:4"),
+    (9, 16, "9:16"),
+    (9, 19, "9:19"),
+    (9, 20, "9:20"),
+    (1, 1, "1:1"),
+]
+
 
 def calculate_aspect_ratio(width: int, height: int) -> str:
-    """Return simplified aspect ratio string like '16:9'."""
+    """Return simplified aspect ratio string like '16:9'.
+
+    Uses approximate matching (~2% tolerance) so that non-standard
+    resolutions like 901x1600 map to the nearest known ratio (9:16).
+    """
     if width <= 0 or height <= 0:
         return "unknown"
+
+    # Try exact GCD match first
     divisor = gcd(width, height)
     w = width // divisor
     h = height // divisor
-    # Simplify common ratios
-    common = {
-        (16, 9): "16:9",
-        (16, 10): "16:10",
-        (4, 3): "4:3",
-        (21, 9): "21:9",
-        (32, 9): "32:9",
-        (3, 2): "3:2",
-        (5, 4): "5:4",
-        (9, 16): "9:16",
-        (9, 19): "9:19",
-        (9, 20): "9:20",
-        (1, 1): "1:1",
-    }
-    return common.get((w, h), f"{w}:{h}")
+    exact = {(r[0], r[1]): r[2] for r in KNOWN_RATIOS}
+    if (w, h) in exact:
+        return exact[(w, h)]
+
+    # Approximate match — compare actual ratio to known ratios within 2% tolerance
+    actual = width / height
+    best_label = None
+    best_diff = float("inf")
+    for rw, rh, label in KNOWN_RATIOS:
+        known = rw / rh
+        diff = abs(actual - known) / known
+        if diff < best_diff:
+            best_diff = diff
+            best_label = label
+
+    if best_diff < 0.02:  # Within 2%
+        return best_label
+
+    return f"{w}:{h}"
 
 
 def is_mobile(width: int, height: int) -> bool:

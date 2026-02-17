@@ -40,6 +40,8 @@ EXCLUDE_PATTERNS = [
     r"/thumb[s]?/", r"/small/", r"/preview/", r"/mini/",
     r"[_-]t\.", r"[_-]sq\.", r"[_-]sm\.", r"[_-]xs\.",
     r"\.th\.", r"/tiny/", r"/micro/",
+    # URL-embedded tiny dimensions (e.g., image_95x95.webp, 50x50.jpg)
+    r"[_/]\d{1,2}x\d{1,2}[_./]",
     r"/compressed/", r"/optimized/", r"/resized/",
     # Stock photo / watermarked image domains
     r"istockphoto\.com", r"gettyimages\.", r"shutterstock\.com",
@@ -359,6 +361,10 @@ class GenericAdapter(BaseAdapter):
                                   ["wallpaper", "hero", "main", "detail", "full", "preview",
                                    "show", "view", "content-image", "single", "primary",
                                    "featured", "cover", "display", "zoom"])
+
+            # Skip images with explicitly small dimensions (icons, logos, etc.)
+            if width and height and width < 200 and height < 200:
+                continue
 
             score = self._score_url(abs_url)
             if is_hero_context:

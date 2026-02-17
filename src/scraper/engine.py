@@ -104,9 +104,11 @@ class ScraperEngine:
         min_h = config_store.get("scraping", "min_height", default=600)
         allowed_aspects = config_store.get("scraping", "allowed_aspects", default=[])
         allow_mobile = config_store.get("scraping", "allow_mobile", default=True)
+        watermark_detection = config_store.get("scraping", "watermark_detection", default=True)
         return ImageValidator(
             min_width=min_w, min_height=min_h,
             allowed_aspects=allowed_aspects, allow_mobile=allow_mobile,
+            watermark_detection=watermark_detection,
         )
 
     async def initialize(self):

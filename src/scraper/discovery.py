@@ -18,6 +18,20 @@ BLOCKED_DOMAINS = {
     "google.com", "youtube.com", "facebook.com", "twitter.com", "x.com",
     "instagram.com", "reddit.com", "pinterest.com", "amazon.com", "ebay.com",
     "wikipedia.org", "tiktok.com", "linkedin.com", "duckduckgo.com",
+    # Ad networks and trackers (show up as outbound links on wallpaper sites)
+    "freestar.com", "ads.freestar.com", "doubleclick.net", "googlesyndication.com",
+    "googleadservices.com", "adnxs.com", "adsrvr.org", "criteo.com",
+    "taboola.com", "outbrain.com", "mgid.com", "revcontent.com",
+    # AI art generators (not wallpaper galleries)
+    "openart.ai", "midjourney.com", "civitai.com", "lexica.art",
+    "playground.com", "ideogram.ai", "nightcafe.studio",
+    # Cloud storage / CDN / utility
+    "cloudflare.com", "jsdelivr.net", "cdnjs.com", "bootstrapcdn.com",
+    "wordpress.org", "wordpress.com", "w3.org", "schema.org",
+    # App stores
+    "play.google.com", "apps.apple.com", "microsoft.com",
+    # Social / sharing
+    "t.me", "discord.gg", "discord.com", "whatsapp.com",
 }
 MIN_VALIDATION_SCORE = 1
 MAX_QUERIES_PER_RUN = 5
@@ -361,10 +375,14 @@ class DiscoveryEngine:
                 if source_manager.domain_exists(link_parsed.netloc):
                     continue
 
-                # Check if the link looks wallpaper-related
+                # Check if the link looks wallpaper-related.
+                # Only check domain + path + anchor text, NOT query params.
+                # Query params often contain the source site's name (tracking),
+                # which causes false positives like ads.freestar.com?utm_source=wallpapersite
                 text = link.get_text(strip=True)
                 title = link.get("title", "") or ""
-                combined = f"{abs_url} {text} {title}"
+                domain_and_path = f"{link_parsed.netloc}{link_parsed.path}"
+                combined = f"{domain_and_path} {text} {title}"
 
                 if wallpaper_hints.search(combined):
                     seen_domains.add(link_root)

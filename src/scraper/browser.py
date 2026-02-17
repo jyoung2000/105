@@ -224,49 +224,68 @@ class BrowserManager:
                      If empty, uses the site's homepage.
         """
         page, is_reused = await self._get_or_create_page(url)
-        try:
-            # Build referer: use provided referer, or site homepage
-            if not referer:
-                parsed = urlparse(url)
-                referer = f"{parsed.scheme}://{parsed.netloc}/"
 
-            # Navigate — use 'load' event to wait for full page rendering
-            # (domcontentloaded is too early for JS-heavy sites with challenges)
-            await page.goto(url, wait_until="load", timeout=30000, referer=referer)
-            await page.wait_for_timeout(jitter(wait_time))
+        # Build referer: use provided referer, or site homepage
+        if not referer:
+            parsed = urlparse(url)
+            referer = f"{parsed.scheme}://{parsed.netloc}/"
 
-            # Check if we landed on a challenge/captcha page and wait it out
-            challenge_detected = await self._wait_through_challenge(page)
-            if challenge_detected:
-                # After challenge resolves, wait a bit longer for the real page
-                await page.wait_for_timeout(jitter(1500))
-
-            # Human-like scrolling with variable speed
-            for i in range(scroll_count):
-                # Randomize scroll distance (75%-125% of viewport height)
-                vh = page.viewport_size["height"] if page.viewport_size else 900
-                scroll_amount = random.randint(int(vh * 0.75), int(vh * 1.25))
-                await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-                await page.wait_for_timeout(jitter(scroll_wait_ms))
-
-                # Occasional longer pause (simulates reading)
-                if random.random() < 0.2:
-                    await page.wait_for_timeout(jitter(1500, 0.5))
-
-            # Scroll back to top
-            await page.evaluate("window.scrollTo(0, 0)")
-            await page.wait_for_timeout(jitter(500))
-            return await page.content()
-        except Exception as e:
-            # If the persistent page broke, discard it so a fresh one is created next time
-            logger.debug(f"Page navigation error: {e}")
+        for attempt in range(2):
             try:
-                await page.close()
-            except Exception:
-                pass
-            self._persistent_page = None
-            self._persistent_domain = None
-            raise
+                # Navigate — use 'load' event to wait for full page rendering
+                # (domcontentloaded is too early for JS-heavy sites with challenges)
+                await page.goto(url, wait_until="load", timeout=30000, referer=referer)
+                await page.wait_for_timeout(jitter(wait_time))
+
+                # Check if we landed on a challenge/captcha page and wait it out
+                challenge_detected = await self._wait_through_challenge(page)
+                if challenge_detected:
+                    # After challenge resolves, wait a bit longer for the real page
+                    await page.wait_for_timeout(jitter(1500))
+
+                # Human-like scrolling with variable speed
+                for i in range(scroll_count):
+                    # Randomize scroll distance (75%-125% of viewport height)
+                    vh = page.viewport_size["height"] if page.viewport_size else 900
+                    scroll_amount = random.randint(int(vh * 0.75), int(vh * 1.25))
+                    await page.evaluate(f"window.scrollBy(0, {scroll_amount})")
+                    await page.wait_for_timeout(jitter(scroll_wait_ms))
+
+                    # Occasional longer pause (simulates reading)
+                    if random.random() < 0.2:
+                        await page.wait_for_timeout(jitter(1500, 0.5))
+
+                # Scroll back to top
+                await page.evaluate("window.scrollTo(0, 0)")
+                await page.wait_for_timeout(jitter(500))
+                return await page.content()
+            except Exception as e:
+                error_str = str(e)
+                is_socket_error = any(s in error_str for s in [
+                    "ERR_SOCKET_NOT_CONNECTED", "ERR_CONNECTION_RESET",
+                    "ERR_CONNECTION_REFUSED", "ERR_CONNECTION_CLOSED",
+                    "Target closed", "target page, currentContext",
+                ])
+                # On socket/connection errors with a reused page, discard and retry once
+                if is_socket_error and attempt == 0:
+                    logger.info(f"Socket error on reused page, creating fresh page and retrying: {error_str[:80]}")
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    self._persistent_page = None
+                    self._persistent_domain = None
+                    page, _ = await self._get_or_create_page(url)
+                    continue
+                # Non-retryable or second attempt — discard and raise
+                logger.debug(f"Page navigation error: {e}")
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                self._persistent_page = None
+                self._persistent_domain = None
+                raise
 
     # Strings that indicate a challenge/captcha page (Cloudflare, DDoS-Guard, etc.)
     _CHALLENGE_SIGNALS = [
