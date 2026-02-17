@@ -90,14 +90,41 @@ class BrowserManager:
                     },
                 )
 
-                # Apply stealth patches (graceful fallback)
+                # Apply stealth patches: manual JS-level anti-detection
+                # These override common headless browser fingerprints
+                await self._context.add_init_script("""
+                    // Hide webdriver flag
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    // Fake plugins (headless Chrome has 0 plugins)
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [1, 2, 3, 4, 5],
+                    });
+                    // Fake languages
+                    Object.defineProperty(navigator, 'languages', {
+                        get: () => ['en-US', 'en'],
+                    });
+                    // Fix chrome object
+                    window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}};
+                    // Fix permissions query
+                    const originalQuery = window.navigator.permissions.query;
+                    window.navigator.permissions.query = (parameters) => (
+                        parameters.name === 'notifications' ?
+                        Promise.resolve({state: Notification.permission}) :
+                        originalQuery(parameters)
+                    );
+                    // Hide automation-related properties
+                    delete navigator.__proto__.webdriver;
+                """)
+
+                # Also try the stealth library if available (extra patches)
                 try:
                     from playwright_stealth import stealth_async
                     self._stealth_fn = stealth_async
-                    logger.info("Playwright stealth loaded")
+                    logger.info("Playwright stealth library also loaded")
                 except ImportError:
                     self._stealth_fn = None
-                    logger.warning("playwright-stealth not installed, proceeding without stealth")
+
+                logger.info("Browser stealth patches applied")
 
                 self._initialized = True
                 logger.info(f"Browser initialized (UA: {ua[:50]}..., VP: {vp['width']}x{vp['height']})")

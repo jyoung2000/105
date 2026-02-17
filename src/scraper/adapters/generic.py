@@ -47,7 +47,7 @@ NAV_EXCLUDE_PATTERNS = [
     r"/about", r"/contact", r"/terms", r"/privacy", r"/faq", r"/help",
     r"/cart", r"/checkout", r"/account", r"/settings", r"/profile",
     r"/feed", r"/trending", r"/popular", r"/latest", r"/top/?$",
-    r"^/$", r"/index\.html?$",
+    r"^/?$", r"/index\.html?$",
     r"^/@",                # User profile pages (/@username)
     r"^/user/", r"^/u/",  # Other user page patterns
     r"^/author/", r"^/photographer/", r"^/contributor/",
@@ -174,6 +174,24 @@ class GenericAdapter(BaseAdapter):
         # Sort by score (highest first) and return
         images.sort(key=lambda x: x.width * x.height if x.width and x.height else 0, reverse=True)
         logger.info(f"Found {len(images)} potential wallpapers on {page_url}")
+
+        if not images:
+            # Debug: log page diagnostics to help troubleshoot empty results
+            total_imgs = len(soup.find_all("img"))
+            total_links = len(soup.find_all("a", href=True))
+            html_len = len(html)
+            title_tag = soup.find("title")
+            page_title = title_tag.get_text(strip=True)[:100] if title_tag else "(no title)"
+            logger.debug(
+                f"Empty result diagnostics for {page_url}: "
+                f"html={html_len} chars, imgs={total_imgs}, links={total_links}, "
+                f"title='{page_title}'"
+            )
+            # Check for common block indicators
+            body_text = soup.get_text()[:500].lower()
+            if any(w in body_text for w in ["captcha", "challenge", "verify you are human", "access denied", "blocked"]):
+                logger.warning(f"Page may be blocked/captcha'd: {page_url}")
+
         return images
 
     def get_detail_page_links(self, html: str, page_url: str) -> list[dict]:
@@ -215,12 +233,25 @@ class GenericAdapter(BaseAdapter):
             if abs_url in seen:
                 continue
 
-            # Must contain a thumbnail image
+            # Must contain or be associated with a thumbnail image
             img = link.find("img")
+            if not img:
+                # Many gallery sites (e.g. Wallhaven) use <figure> or card layouts
+                # where <a> and <img> are siblings, not nested
+                parent = link.parent
+                if parent and parent.name in ("figure", "li", "article"):
+                    img = parent.find("img")
+                elif parent and parent.name == "div":
+                    classes = " ".join(parent.get("class", [])).lower()
+                    if any(k in classes for k in ("thumb", "card", "item", "wallpaper", "preview", "grid")):
+                        img = parent.find("img")
             if not img:
                 continue
 
-            thumb_src = img.get("src", "") or img.get("data-src", "") or ""
+            thumb_src = img.get("data-src", "") or img.get("src", "") or ""
+            # Skip base64 data URIs (lazy-load placeholders)
+            if thumb_src.startswith("data:"):
+                thumb_src = img.get("data-src", "") or img.get("data-original", "") or ""
             if not thumb_src:
                 continue
 
