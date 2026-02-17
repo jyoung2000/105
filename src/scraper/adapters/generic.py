@@ -586,28 +586,45 @@ class GenericAdapter(BaseAdapter):
             if not img:
                 # Check sibling/parent layouts (Wallhaven's <figure><img/><a/></figure>)
                 parent = link.parent
-                if parent and parent.name in ("figure", "li", "article"):
+                if parent and parent.name in ("figure", "li", "article", "div", "span"):
                     img = parent.find("img")
-                elif parent and parent.name == "div":
-                    classes = " ".join(parent.get("class", [])).lower()
-                    if any(k in classes for k in ("thumb", "card", "item", "wallpaper",
-                                                   "preview", "grid", "pic")):
-                        img = parent.find("img")
+                # Try grandparent too (common in nested card layouts)
+                if not img and parent:
+                    grandparent = getattr(parent, 'parent', None)
+                    if grandparent and grandparent.name in ("figure", "li", "article", "div"):
+                        classes = " ".join(grandparent.get("class", [])).lower()
+                        if any(k in classes for k in ("thumb", "card", "item", "wallpaper",
+                                                       "preview", "grid", "pic", "cell",
+                                                       "entry", "post", "tile")):
+                            img = grandparent.find("img")
+
+            # Check for background-image on the link or its container
+            has_bg_thumb = False
+            if not img:
+                for check_elem in [link, link.parent]:
+                    if check_elem and hasattr(check_elem, 'get'):
+                        style = check_elem.get("style", "")
+                        if "background-image" in style or "background:" in style:
+                            has_bg_thumb = True
+                            break
 
             # Get thumbnail info
             thumb_src = ""
             alt = ""
             title = link.get("title", "") or ""
             if img:
-                thumb_src = img.get("data-src", "") or img.get("src", "") or ""
+                # Try all common lazy-load attributes
+                thumb_src = (img.get("data-src", "") or img.get("src", "")
+                             or img.get("data-original", "") or img.get("data-lazy-src", "") or "")
                 if thumb_src.startswith("data:"):
-                    thumb_src = img.get("data-src", "") or img.get("data-original", "") or ""
+                    thumb_src = (img.get("data-src", "") or img.get("data-original", "")
+                                 or img.get("data-lazy-src", "") or "")
                 alt = img.get("alt", "") or ""
                 if not title:
                     title = img.get("title", "") or ""
 
-            # Accept link if it has an associated image OR has a detail-page URL pattern
-            has_img = bool(img and thumb_src)
+            # Accept link if it has an associated image/background OR has a detail-page URL pattern
+            has_img = bool((img and thumb_src) or has_bg_thumb)
             has_detail_pattern = self._looks_like_detail_url(path)
 
             if not has_img and not has_detail_pattern:
@@ -629,17 +646,25 @@ class GenericAdapter(BaseAdapter):
         """Check if a URL path looks like a single-wallpaper detail page.
 
         Matches patterns like: /w/abc123, /wallpaper-name-123,
-        /photo/123, /image/123, /pic/123, etc.
+        /photo/123, /image/123, /long-descriptive-slug.html, etc.
         """
         detail_patterns = [
             r"^/w/[a-z0-9]+$",                  # Wallhaven: /w/abc123
-            r"/wallpaper[/-]",                    # Generic: /wallpaper/... or /wallpaper-...
+            r"wallpaper[s]?[/-]",                 # Generic: /wallpaper/..., /wallpapers/..., -wallpapers.html
             r"/photo/\d+",                         # Photo detail pages
             r"/image/\d+",                         # Image detail pages
             r"/pic/\d+",                           # Pic detail pages
             r"^/[^/]+-\d+\.html$",                # 4KWallpapers: /name-123.html
             r"/download/\d+",                      # Download pages
             r"^/[^/]+/[^/]+-\d+$",                # Category/slug-id pattern
+            # Long descriptive slugs ending in .html (HDWallpapers.in pattern)
+            r"^/[a-z0-9_-]{20,}\.html$",
+            # Path with "hd" or resolution hints (common in wallpaper detail URLs)
+            r"_hd[_-]",
+            r"_4k[_-]",
+            r"_uhd[_-]",
+            # Single deep path (not nested like /category/subcategory/page)
+            r"^/[^/]+\.html$",
         ]
         return any(re.search(p, path, re.I) for p in detail_patterns)
 

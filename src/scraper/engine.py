@@ -193,6 +193,7 @@ class ScraperEngine:
         profile = site_profiles.get(job.url)
 
         current_url = job.url
+        consecutive_blocked = 0
         for page_num in range(1, job.max_pages + 1):
             logger.info(f"Scraping page {page_num}: {current_url}")
             job.pages_scraped = page_num
@@ -205,6 +206,29 @@ class ScraperEngine:
                 logger.error(f"Failed to load page {current_url}: {e}")
                 job.error_log.append(f"Page load failed: {e}")
                 break
+
+            # Check if the gallery page itself is blocked
+            if self._page_is_blocked(html):
+                consecutive_blocked += 1
+                logger.warning(
+                    f"Gallery page {page_num} appears blocked ({consecutive_blocked} in a row): {current_url}"
+                )
+                if consecutive_blocked >= 2:
+                    logger.warning("Site is blocking gallery pages — stopping")
+                    break
+                # Wait longer before trying next page
+                await asyncio.sleep(5 + random.random() * 5)
+                # Try to continue to next page anyway
+                try:
+                    next_url = await adapter.get_next_page_url(html, current_url, page_num)
+                    if next_url:
+                        current_url = next_url
+                        continue
+                except Exception:
+                    pass
+                break
+            else:
+                consecutive_blocked = 0
 
             # Discover categories/collections on the page for future variety
             try:
@@ -251,7 +275,8 @@ class ScraperEngine:
                 if fresh_links:
                     logger.info(f"Found {len(fresh_links)} fresh detail page links on page {page_num} — following for full-res images")
                     images = await self._scrape_detail_pages(
-                        fresh_links, adapter, job, scroll_count, scroll_wait, profile
+                        fresh_links, adapter, job, scroll_count, scroll_wait,
+                        profile, gallery_url=current_url
                     )
                     logger.info(f"Got {len(images)} full-res images from detail pages")
                 else:
@@ -301,8 +326,11 @@ class ScraperEngine:
             except Exception:
                 break
 
-            # Randomized delay between pages (2-4s)
-            await asyncio.sleep(2 + random.random() * 2)
+            # Human-like delay between gallery pages (4-7s)
+            await asyncio.sleep(4 + random.random() * 3)
+
+        # Release the persistent browser page for this site
+        await browser_manager.release_site_page()
 
         # Record gallery URL scrape stats and overall stats
         profile.record_gallery_scrape(job.url, job.images_found)
@@ -333,9 +361,10 @@ class ScraperEngine:
 
     async def _scrape_detail_pages(self, detail_links: list[dict], adapter, job: ScrapeJob,
                                     scroll_count: int, scroll_wait: int,
-                                    profile=None) -> list:
+                                    profile=None, gallery_url: str = "") -> list:
         """Visit individual detail/wallpaper pages to find full-size images.
 
+        Uses the gallery URL as referer (like clicking a thumbnail on the listing page).
         Includes adaptive back-off: if consecutive pages return 0 images (likely
         blocked), the delay between requests increases to avoid triggering anti-bot.
         """
@@ -345,14 +374,16 @@ class ScraperEngine:
         links_to_visit = detail_links[:min(len(detail_links), max_details * 3)]
 
         consecutive_failures = 0
-        base_delay = 2.0  # seconds — starts at 2-4s, increases on failures
+        base_delay = 3.0  # seconds — starts at 3-5s, increases on failures
 
         for i, link_info in enumerate(links_to_visit):
             detail_url = link_info["url"]
             try:
                 logger.info(f"Visiting detail page {i+1}/{len(links_to_visit)}: {detail_url}")
                 html = await browser_manager.get_page_content(
-                    detail_url, scroll_count=min(scroll_count, 3), scroll_wait_ms=scroll_wait
+                    detail_url, scroll_count=min(scroll_count, 3),
+                    scroll_wait_ms=scroll_wait,
+                    referer=gallery_url,
                 )
 
                 # Detect blocked/challenge pages before parsing

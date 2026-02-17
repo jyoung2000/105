@@ -1,4 +1,12 @@
-"""Playwright browser manager — stealth mode with human-like behavior."""
+"""Playwright browser manager — stealth mode with human-like behavior.
+
+Key anti-detection features:
+- Reuses a single browser tab per site (like a real user clicking links)
+- Proper referer chain (gallery → detail page, not always the homepage)
+- Waits for full page load + challenge auto-solve
+- Human-like scrolling with variable speed
+- Stealth JS patches to hide automation fingerprints
+"""
 import asyncio
 import base64
 import random
@@ -37,7 +45,11 @@ def jitter(base_ms: int, variance: float = 0.3) -> int:
 
 
 class BrowserManager:
-    """Manages a single Playwright browser instance and context with stealth."""
+    """Manages a single Playwright browser instance and context with stealth.
+
+    Reuses a single browser tab for same-domain navigation (like a real user
+    clicking links) to preserve JS state, cookies, and Cloudflare clearance.
+    """
 
     def __init__(self):
         self._playwright = None
@@ -47,6 +59,9 @@ class BrowserManager:
         self._initialized = False
         self._stealth_fn = None
         self._current_ua = ""
+        # Persistent page for same-domain navigation
+        self._persistent_page = None
+        self._persistent_domain = None
 
     async def initialize(self) -> bool:
         """Launch browser with stealth patches. Returns False on failure (non-fatal)."""
@@ -135,8 +150,54 @@ class BrowserManager:
                 self._initialized = False
                 return False
 
+    async def _get_or_create_page(self, url: str) -> tuple:
+        """Get a persistent page for same-domain navigation, or create a new one.
+
+        Returns (page, is_reused) — is_reused tells the caller whether this page
+        already has state from a previous navigation on the same domain.
+        """
+        if not self._initialized:
+            success = await self.initialize()
+            if not success:
+                raise RuntimeError("Browser not available")
+
+        target_domain = self._root_domain(urlparse(url).netloc)
+
+        # Reuse existing page if same domain (like clicking a link on the same site)
+        if (self._persistent_page and self._persistent_domain == target_domain):
+            try:
+                # Check page is still alive
+                await self._persistent_page.evaluate("1")
+                return self._persistent_page, True
+            except Exception:
+                # Page crashed or was closed — create new one
+                self._persistent_page = None
+                self._persistent_domain = None
+
+        # Close old page if switching domains
+        if self._persistent_page:
+            try:
+                await self._persistent_page.close()
+            except Exception:
+                pass
+            self._persistent_page = None
+            self._persistent_domain = None
+
+        # Create new page
+        page = await self._context.new_page()
+        if self._stealth_fn:
+            await self._stealth_fn(page)
+
+        self._persistent_page = page
+        self._persistent_domain = target_domain
+        return page, False
+
     async def get_page(self):
-        """Get a new page from the browser context with stealth applied."""
+        """Get a new page from the browser context with stealth applied.
+
+        For one-off use (e.g., search). Use get_page_content() for site scraping
+        which reuses pages per domain.
+        """
         if not self._initialized:
             success = await self.initialize()
             if not success:
@@ -147,24 +208,38 @@ class BrowserManager:
         return page
 
     async def get_page_content(self, url: str, wait_time: int = 3000,
-                               scroll_count: int = 5, scroll_wait_ms: int = 800) -> str:
+                               scroll_count: int = 5, scroll_wait_ms: int = 800,
+                               referer: str = "") -> str:
         """Navigate to URL and return page HTML content with human-like behavior.
 
-        Detects Cloudflare/CAPTCHA challenge pages and waits for them to auto-solve
-        before returning content.
-        """
-        page = await self.get_page()
-        try:
-            # Set referer based on the target URL's domain
-            parsed = urlparse(url)
-            referer = f"{parsed.scheme}://{parsed.netloc}/"
+        Reuses the same browser tab for same-domain requests (like a real user
+        clicking links). Detects and waits through Cloudflare/CAPTCHA challenges.
 
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000,
-                            referer=referer)
+        Args:
+            url: The URL to navigate to.
+            wait_time: Base wait time in ms after page load.
+            scroll_count: Number of scroll actions.
+            scroll_wait_ms: Base wait between scrolls.
+            referer: The referring page URL (e.g., the gallery page).
+                     If empty, uses the site's homepage.
+        """
+        page, is_reused = await self._get_or_create_page(url)
+        try:
+            # Build referer: use provided referer, or site homepage
+            if not referer:
+                parsed = urlparse(url)
+                referer = f"{parsed.scheme}://{parsed.netloc}/"
+
+            # Navigate — use 'load' event to wait for full page rendering
+            # (domcontentloaded is too early for JS-heavy sites with challenges)
+            await page.goto(url, wait_until="load", timeout=30000, referer=referer)
             await page.wait_for_timeout(jitter(wait_time))
 
             # Check if we landed on a challenge/captcha page and wait it out
-            await self._wait_through_challenge(page)
+            challenge_detected = await self._wait_through_challenge(page)
+            if challenge_detected:
+                # After challenge resolves, wait a bit longer for the real page
+                await page.wait_for_timeout(jitter(1500))
 
             # Human-like scrolling with variable speed
             for i in range(scroll_count):
@@ -182,8 +257,16 @@ class BrowserManager:
             await page.evaluate("window.scrollTo(0, 0)")
             await page.wait_for_timeout(jitter(500))
             return await page.content()
-        finally:
-            await page.close()
+        except Exception as e:
+            # If the persistent page broke, discard it so a fresh one is created next time
+            logger.debug(f"Page navigation error: {e}")
+            try:
+                await page.close()
+            except Exception:
+                pass
+            self._persistent_page = None
+            self._persistent_domain = None
+            raise
 
     # Strings that indicate a challenge/captcha page (Cloudflare, DDoS-Guard, etc.)
     _CHALLENGE_SIGNALS = [
@@ -246,6 +329,27 @@ class BrowserManager:
         except Exception as e:
             logger.debug(f"Challenge detection error: {e}")
             return False
+
+    async def release_site_page(self):
+        """Close the persistent page for the current site.
+
+        Call this when done scraping a site to free resources.
+        """
+        if self._persistent_page:
+            try:
+                await self._persistent_page.close()
+            except Exception:
+                pass
+            self._persistent_page = None
+            self._persistent_domain = None
+
+    @staticmethod
+    def _root_domain(netloc: str) -> str:
+        """Extract root domain from netloc (e.g. 'th.wallhaven.cc' -> 'wallhaven.cc')."""
+        parts = netloc.lower().split(".")
+        if len(parts) >= 2:
+            return ".".join(parts[-2:])
+        return netloc.lower()
 
     async def web_search(self, query: str) -> list[str]:
         """Search the web using httpx (not Playwright) for reliability.
@@ -577,6 +681,8 @@ class BrowserManager:
     async def close(self):
         """Clean up browser resources."""
         try:
+            if self._persistent_page:
+                await self._persistent_page.close()
             if self._context:
                 await self._context.close()
             if self._browser:
@@ -592,6 +698,8 @@ class BrowserManager:
             self._playwright = None
             self._browser = None
             self._context = None
+            self._persistent_page = None
+            self._persistent_domain = None
 
 
 # Singleton
