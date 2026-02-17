@@ -163,6 +163,96 @@ body::before {
     border-bottom-color: var(--accent);
 }
 
+/* Nav status indicator — always visible in top-right */
+.nav-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    padding-left: 1rem;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.nav-status-idle {
+    color: var(--text-muted);
+}
+.nav-status-active {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--accent-subtle);
+    color: var(--accent);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    font-weight: 500;
+    animation: status-pulse 2s ease-in-out infinite;
+}
+@keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+.nav-status-discovery {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(191, 90, 242, 0.15);
+    color: #bf5af2;
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    font-weight: 500;
+    animation: status-pulse 2s ease-in-out infinite;
+}
+.nav-status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+}
+
+/* Image loading states for browse gallery */
+.browse-item-loading {
+    position: relative;
+}
+.browse-item-loading::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,0.04) 50%, transparent 70%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+@keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+}
+
+.browse-img-error {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 12px;
+    gap: 0.4rem;
+}
+.browse-img-error-icon { font-size: 1.5rem; opacity: 0.4; }
+.browse-retry-btn {
+    background: var(--bg-hover);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s var(--ease);
+}
+.browse-retry-btn:hover { background: var(--bg-active); }
+
 /* ===================================================================
    Main content area
    =================================================================== */

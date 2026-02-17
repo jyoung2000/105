@@ -4,6 +4,8 @@ const GALLERY_LIMIT = 50;
 let galleryPolling = null;
 let jobsPolling = null;
 let sourcesPolling = null;
+let globalStatusPolling = null;
+let lastGlobalStatus = null;
 let tableFieldsCache = [];
 let currentMapping = {};
 
@@ -21,7 +23,7 @@ document.querySelectorAll('.nav-tab').forEach(tab => {
 function onTabSwitch(tab) {
     stopPolling();
     if (tab === 'gallery') { loadGallerySummary(); loadGallery(); startGalleryPolling(); }
-    if (tab === 'scrape') { checkBaserowStatus(); loadScrapeJobs(); }
+    if (tab === 'scrape') { checkBaserowStatus(); loadScrapeJobs(); startScrapePolling(); }
     if (tab === 'sources') { loadSources(); loadQueries(); loadSchedulerStatus(); loadLiveStatus(); startSourcesPolling(); }
     if (tab === 'jobs') { loadJobs(); startJobsPolling(); }
     if (tab === 'settings') { loadSettings(); }
@@ -34,6 +36,82 @@ function stopPolling() {
     if (galleryPolling) { clearInterval(galleryPolling); galleryPolling = null; }
     if (jobsPolling) { clearInterval(jobsPolling); jobsPolling = null; }
     if (sourcesPolling) { clearInterval(sourcesPolling); sourcesPolling = null; }
+    if (typeof scrapePolling !== 'undefined' && scrapePolling) { clearInterval(scrapePolling); scrapePolling = null; }
+}
+
+// ==================== GLOBAL STATUS (always running) ====================
+function startGlobalStatusPolling() {
+    if (globalStatusPolling) return;
+    updateGlobalStatus(); // immediate first call
+    globalStatusPolling = setInterval(updateGlobalStatus, 3000);
+}
+
+async function updateGlobalStatus() {
+    try {
+        const data = await api('/api/status/live');
+        lastGlobalStatus = data;
+        renderNavStatus(data);
+    } catch (e) {
+        // Silently fail — don't spam errors for the always-on poller
+    }
+}
+
+function renderNavStatus(data) {
+    const el = document.getElementById('nav-status');
+    if (!el) return;
+
+    const job = data.current_job;
+    const discoveryRunning = data.discovery_running;
+    const scheduler = data.scheduler || {};
+
+    if (job && job.status === 'running') {
+        const name = job.source_name || 'Unknown';
+        const progress = job.progress || 0;
+        const found = job.images_found || 0;
+        const uploaded = job.images_uploaded || 0;
+        const page = job.pages_scraped || 0;
+        const maxPages = job.max_pages || '?';
+        el.innerHTML = `
+            <div class="nav-status-active" title="Scraping ${esc(name)}: page ${page}/${maxPages}, ${found} found, ${uploaded} uploaded">
+                <span class="nav-status-dot"></span>
+                <span>Scraping: ${esc(name)} (${progress}%)</span>
+            </div>
+        `;
+    } else if (discoveryRunning) {
+        el.innerHTML = `
+            <div class="nav-status-discovery">
+                <span class="nav-status-dot"></span>
+                <span>Discovering sources...</span>
+            </div>
+        `;
+    } else if (scheduler.paused) {
+        el.innerHTML = '<span class="nav-status-idle">Paused</span>';
+    } else {
+        el.innerHTML = '<span class="nav-status-idle">Idle</span>';
+    }
+
+    // Also update gallery live banner if gallery tab is active
+    updateGalleryLiveBanner(job);
+}
+
+function updateGalleryLiveBanner(job) {
+    const banner = document.getElementById('gallery-live-banner');
+    if (!banner) return;
+
+    if (job && job.status === 'running') {
+        banner.style.display = '';
+        const name = job.source_name || job.url || 'Unknown';
+        const titleEl = document.getElementById('gallery-live-title');
+        const detailEl = document.getElementById('gallery-live-detail');
+        const progressEl = document.getElementById('gallery-live-progress');
+        const statsEl = document.getElementById('gallery-live-stats');
+        if (titleEl) titleEl.textContent = 'Scraping: ' + name;
+        if (detailEl) detailEl.textContent = 'Page ' + (job.pages_scraped || 0) + '/' + (job.max_pages || '?') + ' \u2022 ' + (job.images_found || 0) + ' images found';
+        if (progressEl) progressEl.style.width = (job.progress || 0) + '%';
+        if (statsEl) statsEl.textContent = (job.images_uploaded || 0) + ' uploaded, ' + (job.duplicates || 0) + ' dupes';
+    } else {
+        banner.style.display = 'none';
+    }
 }
 
 // === API Helper ===
@@ -243,6 +321,14 @@ document.getElementById('gallery-source-filter').addEventListener('change', () =
 document.getElementById('gallery-status-filter').addEventListener('change', () => loadGallery());
 
 // ==================== SCRAPE ====================
+let scrapePolling = null;
+function startScrapePolling() {
+    scrapePolling = setInterval(loadScrapeJobs, 3000);
+}
+function stopScrapePolling() {
+    if (scrapePolling) { clearInterval(scrapePolling); scrapePolling = null; }
+}
+
 async function checkBaserowStatus() {
     try {
         const data = await api('/api/baserow/status');
@@ -813,6 +899,12 @@ async function loadBrowse(page) {
     if (search) url += `&search=${encodeURIComponent(search)}`;
     if (sort) url += `&order_by=${encodeURIComponent(sort)}`;
 
+    // Show loading state
+    const loadBtn = document.getElementById('browse-load-btn');
+    const loadingBanner = document.getElementById('browse-loading-banner');
+    if (loadBtn) { loadBtn.disabled = true; loadBtn.textContent = 'Loading...'; }
+    if (loadingBanner) loadingBanner.style.display = '';
+
     try {
         const data = await api(url);
         browseFieldMapping = data.field_mapping || {};
@@ -829,7 +921,23 @@ async function loadBrowse(page) {
             '<div class="empty-state"><div class="empty-state-icon">&#9888;</div><div class="empty-state-text">Failed to load</div><div class="empty-state-hint">' + esc(e.message) + '</div></div>';
         document.getElementById('browse-pagination').innerHTML = '';
         document.getElementById('browse-count').textContent = '';
+    } finally {
+        if (loadBtn) { loadBtn.disabled = false; loadBtn.textContent = 'Load from Baserow'; }
+        if (loadingBanner) loadingBanner.style.display = 'none';
     }
+}
+
+function retryAllBrowseImages() {
+    const errorDivs = document.querySelectorAll('.browse-img-error');
+    if (errorDivs.length === 0) {
+        toast('No failed images to retry', 'info');
+        return;
+    }
+    errorDivs.forEach(div => {
+        const retryBtn = div.querySelector('.browse-retry-btn');
+        if (retryBtn) retryBtn.click();
+    });
+    toast(`Retrying ${errorDivs.length} images...`, 'info');
 }
 
 function browseField(row, scraperField) {
@@ -856,6 +964,11 @@ function proxyImgUrl(rawUrl) {
             }
         } catch (e) { /* keep rawUrl as-is */ }
     }
+    // Ensure the URL actually has a protocol — some Baserow configs return
+    // protocol-relative or bare hostnames
+    if (rawUrl && !rawUrl.startsWith('http') && !rawUrl.startsWith('/')) {
+        rawUrl = browseApiUrl.replace(/\/+$/, '') + '/' + rawUrl;
+    }
     return '/api/baserow/image-proxy?url=' + encodeURIComponent(rawUrl);
 }
 
@@ -863,20 +976,32 @@ function browseFileUrl(file) {
     // Extract best URL from a Baserow file object. Tries multiple sources
     // since self-hosted Baserow may return internal URLs or omit url entirely.
     if (!file) return '';
-    // 1. Try file.url (standard Baserow response)
+    // 1. Try file.url (standard Baserow response — most reliable)
     if (file.url) return file.url;
-    // 2. Construct from file.name using known Baserow media path
+    // 2. Try file.original_name or file.visible_name path
     if (file.name) return '/media/user_files/' + file.name;
     return '';
 }
 
-function browseImageUrl(row) {
+function browseThumbnailUrl(row) {
+    // Try to use Baserow's built-in thumbnails for faster loading,
+    // falling back to the full image URL if thumbnails aren't available.
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
-    return proxyImgUrl(browseFileUrl(fileField[0]));
+    const file = fileField[0];
+
+    // Baserow provides thumbnail variants in file.thumbnails
+    if (file.thumbnails) {
+        // Prefer 'small' (200px) for grid, then 'tiny' (64px)
+        const thumb = file.thumbnails.small || file.thumbnails.tiny || file.thumbnails.card_cover;
+        if (thumb && thumb.url) return proxyImgUrl(thumb.url);
+    }
+
+    // Fall back to full image via proxy
+    return proxyImgUrl(browseFileUrl(file));
 }
 
-function browseThumbnailUrl(row) {
+function browseImageUrl(row) {
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
     return proxyImgUrl(browseFileUrl(fileField[0]));
@@ -888,17 +1013,29 @@ function renderBrowseGrid(rows) {
         grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128444;</div><div class="empty-state-text">No wallpapers found</div><div class="empty-state-hint">Upload wallpapers by scraping sources, or adjust your search.</div></div>';
         return;
     }
-    grid.innerHTML = rows.map(row => {
+    // Stash rows for retry logic
+    window._browseRows = rows;
+
+    grid.innerHTML = rows.map((row, idx) => {
         const title = browseField(row, 'wallpaperTitle') || 'Untitled';
         const width = browseField(row, 'Width') || 0;
         const height = browseField(row, 'Height') || 0;
         const thumb = browseThumbnailUrl(row);
         const isMobile = browseField(row, 'isMobile');
         const rowId = row.id;
+        const hasThumb = !!thumb;
         return `
-            <div class="browse-item" onclick="showBrowseDetail(${rowId})">
-                <img src="${esc(thumb)}" alt="${esc(title)}" loading="lazy"
-                    onerror="this.onerror=null;this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22120%22><rect fill=%22%231c1c1e%22 width=%22200%22 height=%22120%22/><text x=%2250%25%22 y=%2250%25%22 fill=%22%23444%22 font-size=%2213%22 font-family=%22system-ui%22 text-anchor=%22middle%22 dy=%22.3em%22>No Image</text></svg>'">
+            <div class="browse-item ${hasThumb ? 'browse-item-loading' : ''}" id="browse-item-${rowId}" onclick="showBrowseDetail(${rowId})">
+                ${hasThumb ? `
+                    <img src="${esc(thumb)}" alt="${esc(title)}" loading="lazy"
+                        onload="this.parentElement.classList.remove('browse-item-loading')"
+                        onerror="handleBrowseImgError(this, ${rowId}, ${idx})">
+                ` : `
+                    <div class="browse-img-error">
+                        <span class="browse-img-error-icon">&#128444;</span>
+                        <span>No image file</span>
+                    </div>
+                `}
                 <div class="browse-badge">${width}x${height}${isMobile ? ' M' : ''}</div>
                 <div class="browse-overlay">
                     <div class="browse-overlay-title">${esc(title)}</div>
@@ -906,6 +1043,60 @@ function renderBrowseGrid(rows) {
             </div>
         `;
     }).join('');
+}
+
+function handleBrowseImgError(img, rowId, idx) {
+    // Try falling back to the full image URL if thumbnail failed
+    const row = window._browseRows && window._browseRows[idx];
+    if (row && !img.dataset.retried) {
+        img.dataset.retried = '1';
+        const fullUrl = browseImageUrl(row);
+        if (fullUrl && fullUrl !== img.src) {
+            img.src = fullUrl;
+            return;
+        }
+    }
+    // All URLs failed — show error state with retry button
+    img.style.display = 'none';
+    const container = img.parentElement;
+    container.classList.remove('browse-item-loading');
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'browse-img-error';
+    errorDiv.innerHTML = `
+        <span class="browse-img-error-icon">&#128444;</span>
+        <span>Image unavailable</span>
+        <button class="browse-retry-btn" onclick="retryBrowseImage(event, ${rowId}, ${idx})">Retry</button>
+    `;
+    container.insertBefore(errorDiv, container.firstChild);
+}
+
+function retryBrowseImage(event, rowId, idx) {
+    event.stopPropagation();
+    const container = document.getElementById('browse-item-' + rowId);
+    if (!container) return;
+    const row = window._browseRows && window._browseRows[idx];
+    if (!row) return;
+
+    // Remove error state
+    const errorDiv = container.querySelector('.browse-img-error');
+    if (errorDiv) errorDiv.remove();
+
+    // Re-create img with cache-busting
+    const thumb = browseThumbnailUrl(row);
+    const title = browseField(row, 'wallpaperTitle') || '';
+    const cacheBust = thumb + (thumb.includes('?') ? '&' : '?') + '_t=' + Date.now();
+
+    const existingImg = container.querySelector('img');
+    if (existingImg) existingImg.remove();
+
+    container.classList.add('browse-item-loading');
+    const newImg = document.createElement('img');
+    newImg.src = cacheBust;
+    newImg.alt = title;
+    newImg.loading = 'lazy';
+    newImg.onload = () => container.classList.remove('browse-item-loading');
+    newImg.onerror = () => handleBrowseImgError(newImg, rowId, idx);
+    container.insertBefore(newImg, container.firstChild);
 }
 
 function renderBrowsePagination(current, totalPages, total) {
@@ -1144,4 +1335,5 @@ window.addEventListener('DOMContentLoaded', () => {
     loadGallerySummary();
     loadGallery();
     startGalleryPolling();
+    startGlobalStatusPolling();
 });

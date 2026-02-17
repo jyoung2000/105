@@ -19,12 +19,28 @@
             <div class="nav-tab" data-tab="browse">Browse</div>
             <div class="nav-tab" data-tab="stats">Stats</div>
         </div>
+        <div class="nav-status" id="nav-status"></div>
     </nav>
 
     <div class="main">
 
         <!-- ==================== Gallery ==================== -->
         <div id="tab-gallery" class="tab-content active">
+            <div id="gallery-live-banner" class="scraping-banner" style="display:none">
+                <div class="scraping-banner-content">
+                    <span class="spinner"></span>
+                    <div>
+                        <div class="scraping-banner-title" id="gallery-live-title">Scraping in progress...</div>
+                        <div class="scraping-banner-detail" id="gallery-live-detail"></div>
+                    </div>
+                </div>
+                <div class="scraping-banner-progress">
+                    <div class="progress" style="width:140px">
+                        <div class="progress-bar" id="gallery-live-progress"></div>
+                    </div>
+                    <span class="scraping-banner-stats" id="gallery-live-stats"></span>
+                </div>
+            </div>
             <div class="stat-grid" id="gallery-stats"></div>
             <div class="gallery-controls">
                 <input type="text" id="gallery-search" placeholder="Search title or tags..." style="max-width:260px">
@@ -357,8 +373,15 @@
                         <option value="-Width">Widest First</option>
                         <option value="-Height">Tallest First</option>
                     </select>
-                    <button class="btn btn-secondary btn-sm" onclick="loadBrowse()">Refresh</button>
+                    <button class="btn btn-primary btn-sm" onclick="loadBrowse()" id="browse-load-btn">Load from Baserow</button>
+                    <button class="btn btn-secondary btn-sm" onclick="retryAllBrowseImages()">Retry Failed Images</button>
                     <span id="browse-count" style="font-size:12px;color:var(--text-tertiary);margin-left:auto"></span>
+                </div>
+                <div id="browse-loading-banner" style="display:none" class="scraping-banner">
+                    <div class="scraping-banner-content">
+                        <span class="spinner"></span>
+                        <span style="font-size:13px">Loading wallpapers from Baserow...</span>
+                    </div>
                 </div>
                 <div class="browse-grid" id="browse-grid"></div>
                 <div class="browse-pagination" id="browse-pagination"></div>
