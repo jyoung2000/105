@@ -4,10 +4,11 @@ Understands the gallery→detail→download flow:
 - Gallery/listing pages have thumbnails linking to detail pages
 - Detail pages have one main wallpaper image + optional download buttons
 - The scraper should follow thumbnails to detail pages, not download thumbnails
+- On detail pages, always picks the HIGHEST resolution version available
 """
 import re
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 from bs4 import BeautifulSoup
 from .base import BaseAdapter, ScrapedImage
 from src.utils.logging import setup_logging
@@ -132,7 +133,14 @@ class GenericAdapter(BaseAdapter):
             logger.info(f"Found {len(download_images)} wallpaper images via download links on {page_url}")
             return download_images
 
-        # THIRD: General image extraction (for pages without specific selectors)
+        # THIRD: Try to find the single largest/main image on the page
+        # (detail pages often have one hero image without specific selectors)
+        hero = self._find_hero_image(soup, page_url, seen_urls)
+        if hero:
+            logger.info(f"Found hero image on {page_url}")
+            return [hero]
+
+        # FOURTH: General image extraction (for pages without specific selectors)
 
         # Strategy 1: Find direct high-res image links (<a> pointing to image files)
         for link in soup.find_all("a", href=True):
@@ -239,6 +247,7 @@ class GenericAdapter(BaseAdapter):
 
         These selectors target known wallpaper site patterns where the main
         image has a specific ID or class (e.g., img#wallpaper on Wallhaven).
+        Always tries to find the HIGHEST resolution source available.
         """
         images = []
         for selector in DETAIL_IMAGE_SELECTORS:
@@ -249,8 +258,9 @@ class GenericAdapter(BaseAdapter):
 
                 # Could be an img tag or a div with background
                 if elem.name == "img":
-                    src = (elem.get("src", "") or elem.get("data-src", "")
-                           or elem.get("data-original", "") or "")
+                    # Try to get the highest-res source first
+                    highres = self._find_highres_source(elem, page_url)
+                    src = highres or elem.get("src", "") or elem.get("data-src", "") or elem.get("data-original", "") or ""
                     if src and not src.startswith("data:"):
                         abs_url = urljoin(page_url, src)
                         if abs_url not in seen_urls and not self._is_excluded(abs_url):
@@ -275,38 +285,95 @@ class GenericAdapter(BaseAdapter):
                 continue
         return images
 
+    def _find_hero_image(self, soup: BeautifulSoup, page_url: str,
+                          seen_urls: set) -> Optional[ScrapedImage]:
+        """Find the single main/hero image on a detail page.
+
+        Looks for the largest image by explicit dimensions or container context.
+        Only returns a result if there's a clearly dominant image.
+        """
+        candidates = []
+        for img in soup.find_all("img"):
+            src = img.get("src", "") or img.get("data-src", "") or img.get("data-original", "") or ""
+            if not src or src.startswith("data:"):
+                src = img.get("data-src", "") or img.get("data-original", "") or ""
+            if not src:
+                continue
+
+            # Try to get highest-res source
+            highres = self._find_highres_source(img, page_url)
+            abs_url = urljoin(page_url, highres or src)
+            if abs_url in seen_urls or not self._is_image_url(abs_url):
+                continue
+            if self._is_excluded(abs_url):
+                continue
+
+            width = self._parse_dim(img.get("width", ""))
+            height = self._parse_dim(img.get("height", ""))
+            area = width * height if width and height else 0
+
+            # Also check container/wrapper clues
+            parent_classes = ""
+            parent = img.parent
+            for _ in range(3):
+                if parent and hasattr(parent, 'get'):
+                    parent_classes += " " + " ".join(parent.get("class", []))
+                    parent = getattr(parent, 'parent', None)
+                else:
+                    break
+
+            is_hero_context = any(k in parent_classes.lower() for k in
+                                  ["wallpaper", "hero", "main", "detail", "full", "preview",
+                                   "show", "view", "content-image", "single"])
+
+            if area > 0 or is_hero_context:
+                score = self._score_url(abs_url)
+                if is_hero_context:
+                    score += 3
+                candidates.append((abs_url, img, width, height, area, score))
+
+        if not candidates:
+            return None
+
+        # Pick the image with the largest area, or highest score if no dimensions
+        candidates.sort(key=lambda x: (x[4], x[5]), reverse=True)
+        best_url, best_img, w, h, _, _ = candidates[0]
+
+        # Only accept if it's clearly wallpaper-sized or has good context clues
+        if w >= self.min_width or h >= self.min_height or len(candidates) <= 3:
+            seen_urls.add(best_url)
+            alt = best_img.get("alt", "") or ""
+            title = best_img.get("title", "") or alt
+            return self._make_image(best_url, "", alt, title, page_url, best_img,
+                                    score=4, width=w, height=h)
+        return None
+
     def _find_download_links(self, soup: BeautifulSoup, page_url: str,
                               seen_urls: set) -> list[ScrapedImage]:
-        """Find wallpaper download links/buttons on detail pages."""
-        images = []
+        """Find wallpaper download links/buttons on detail pages.
+
+        When multiple resolution options exist (e.g., Original, Large, Medium),
+        picks only the HIGHEST resolution to avoid downloading thumbnails.
+        """
+        candidates = []  # (abs_url, text, link_elem, score)
+        page_root = self._root_domain(urlparse(page_url).netloc)
+
+        # Collect all download link candidates
         for selector in DOWNLOAD_SELECTORS:
             try:
                 links = soup.select(selector)
-                for link in links[:5]:
+                for link in links[:10]:
                     href = link.get("href", "")
                     if not href:
                         continue
                     abs_url = urljoin(page_url, href)
-                    if abs_url in seen_urls:
-                        continue
-                    # Download links may point to image files or download endpoints
+                    text = link.get_text(strip=True)
                     if self._is_image_url(abs_url) and not self._is_excluded(abs_url):
-                        seen_urls.add(abs_url)
-                        text = link.get_text(strip=True)
-                        images.append(self._make_image(
-                            abs_url, "", "", text, page_url, link, score=6
-                        ))
+                        candidates.append((abs_url, text, link, 6))
                     elif "/download" in abs_url.lower():
-                        # Download endpoint — may redirect to image
-                        # Only include if it's on the same domain
                         link_root = self._root_domain(urlparse(abs_url).netloc)
-                        page_root = self._root_domain(urlparse(page_url).netloc)
                         if link_root == page_root:
-                            seen_urls.add(abs_url)
-                            text = link.get_text(strip=True)
-                            images.append(self._make_image(
-                                abs_url, "", "", text, page_url, link, score=6
-                            ))
+                            candidates.append((abs_url, text, link, 6))
             except Exception:
                 continue
 
@@ -317,16 +384,114 @@ class GenericAdapter(BaseAdapter):
                                         "original size", "download wallpaper"]):
                 href = link.get("href", "")
                 abs_url = urljoin(page_url, href)
-                if abs_url not in seen_urls:
-                    link_root = self._root_domain(urlparse(abs_url).netloc)
-                    page_root = self._root_domain(urlparse(page_url).netloc)
-                    if link_root == page_root:
-                        seen_urls.add(abs_url)
-                        images.append(self._make_image(
-                            abs_url, "", "", text, page_url, link, score=7
-                        ))
+                link_root = self._root_domain(urlparse(abs_url).netloc)
+                if link_root == page_root:
+                    candidates.append((abs_url, text, link, 7))
 
+        if not candidates:
+            return []
+
+        # Score each candidate by resolution (highest wins)
+        scored = []
+        for abs_url, text, link_elem, base_score in candidates:
+            res_score = self._resolution_score(abs_url, text)
+            scored.append((abs_url, text, link_elem, base_score + res_score, res_score))
+
+        # Sort by resolution score (highest first)
+        scored.sort(key=lambda x: x[4], reverse=True)
+
+        # Group by base URL (strip dimension parameters) to deduplicate
+        # different resolutions of the same image
+        best_per_base = {}
+        for abs_url, text, link_elem, total_score, res_score in scored:
+            base = self._strip_dimension_params(abs_url)
+            if base not in best_per_base:
+                best_per_base[base] = (abs_url, text, link_elem, total_score)
+
+        # Return only the best candidates (deduplicated)
+        images = []
+        for base, (abs_url, text, link_elem, score) in best_per_base.items():
+            if abs_url not in seen_urls:
+                seen_urls.add(abs_url)
+                images.append(self._make_image(
+                    abs_url, "", "", text, page_url, link_elem, score=score
+                ))
+
+        logger.debug(f"Download links: {len(candidates)} candidates → {len(images)} after dedup/best-res")
         return images
+
+    @staticmethod
+    def _resolution_score(url: str, text: str) -> int:
+        """Score a download link by how likely it is the highest resolution.
+
+        Higher score = higher resolution. Used to pick the best download
+        from multiple resolution options (Original > Large > Medium > Small).
+        """
+        score = 0
+        combined = (url + " " + text).lower()
+
+        # Highest priority: explicit "original" or "full size"
+        if any(w in combined for w in ["original", "full size", "full_size", "fullsize"]):
+            score += 100
+
+        # High priority: very high resolution keywords
+        if any(w in combined for w in ["4k", "uhd", "2160", "8k", "5k"]):
+            score += 80
+
+        # Medium-high: large resolution indicators
+        if any(w in combined for w in ["1440", "2k", "qhd", "wqhd"]):
+            score += 60
+
+        # Medium: standard HD
+        if "1080" in combined or "fhd" in combined:
+            score += 40
+
+        # Extract explicit width from URL params (w=NNNN, width=NNNN)
+        try:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            for key in ["w", "width", "dw"]:
+                if key in params:
+                    w = int(params[key][0])
+                    score += w // 10  # e.g., w=1920 → +192
+        except (ValueError, IndexError):
+            pass
+
+        # Extract explicit dimensions from URL path (e.g., 1920x1080)
+        dim_match = re.search(r"(\d{3,5})x(\d{3,5})", url)
+        if dim_match:
+            w, h = int(dim_match.group(1)), int(dim_match.group(2))
+            score += (w * h) // 10000  # e.g., 1920×1080 → +207
+
+        # Penalize known small-size keywords
+        if any(w in combined for w in ["small", "tiny", "thumb", "preview", "mini"]):
+            score -= 50
+        if any(w in combined for w in ["medium", "med "]):
+            score -= 20
+
+        return score
+
+    @staticmethod
+    def _strip_dimension_params(url: str) -> str:
+        """Strip dimension/size parameters from URL to identify the base image.
+
+        Used to group different resolutions of the same image together.
+        e.g., photo.jpg?w=1920&h=1080 and photo.jpg?w=640&h=427 → same base
+        """
+        try:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            # Remove common dimension parameters
+            dim_keys = {"w", "h", "width", "height", "dw", "dh", "size", "resize",
+                        "dpr", "fit", "crop", "quality", "q", "auto", "cs", "fm"}
+            filtered = {k: v for k, v in params.items() if k.lower() not in dim_keys}
+            if not filtered:
+                return parsed._replace(query="").geturl()
+            from urllib.parse import urlencode
+            new_query = urlencode(filtered, doseq=True)
+            return parsed._replace(query=new_query).geturl()
+        except Exception:
+            return url
 
     def get_detail_page_links(self, html: str, page_url: str) -> list[dict]:
         """Find links to detail/individual wallpaper pages (not image files).

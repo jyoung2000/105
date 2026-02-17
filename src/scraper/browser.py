@@ -1,5 +1,6 @@
 """Playwright browser manager — stealth mode with human-like behavior."""
 import asyncio
+import base64
 import random
 from typing import Optional
 from urllib.parse import urlparse, parse_qs, quote_plus, unquote
@@ -412,7 +413,7 @@ class BrowserManager:
         """Filter and deduplicate search result URLs."""
         urls = []
         skip_domains = {
-            "google.com", "facebook.com", "twitter.com", "x.com",
+            "facebook.com", "twitter.com", "x.com",
             "youtube.com", "instagram.com", "linkedin.com", "tiktok.com",
             "reddit.com", "wikipedia.org", "amazon.com",
         }
@@ -428,15 +429,31 @@ class BrowserManager:
                 params = parse_qs(parsed.query)
                 if "uddg" in params:
                     href = unquote(params["uddg"][0])
-            elif href.startswith("//"):
+
+            # Bing wraps URLs: bing.com/ck/a?...&u=a1BASE64_URL&ntb=1
+            if "bing.com/ck/a" in href:
+                href = self._decode_bing_redirect(href) or href
+
+            # Google wraps URLs: /url?q=REAL_URL
+            if href.startswith("/url?q="):
+                parsed = urlparse(href)
+                params = parse_qs(parsed.query)
+                if "q" in params and params["q"][0].startswith("http"):
+                    href = params["q"][0]
+
+            if href.startswith("//"):
                 href = "https:" + href
             elif not href.startswith("http"):
                 continue
 
             try:
                 domain = urlparse(href).netloc.lower()
-                # Skip DDG internal links
+                # Skip search engine internal links
                 if ddg and "duckduckgo.com" in domain:
+                    continue
+                if "bing.com" in domain or "microsoft.com" in domain:
+                    continue
+                if "google.com" in domain or "googleapis.com" in domain:
                     continue
                 if not any(skip in domain for skip in skip_domains):
                     if href not in urls:
@@ -448,6 +465,31 @@ class BrowserManager:
                 break
 
         return urls
+
+    @staticmethod
+    def _decode_bing_redirect(url: str) -> str | None:
+        """Decode Bing click-tracking redirect URL to get the real destination.
+
+        Bing wraps result URLs as: bing.com/ck/a?...&u=a1BASE64URL&ntb=1
+        The 'u' parameter is 'a1' prefix + base64url-encoded real URL.
+        """
+        try:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query)
+            if "u" in params:
+                u_val = params["u"][0]
+                if u_val.startswith("a1"):
+                    encoded = u_val[2:]
+                    # Add padding if needed
+                    padding = 4 - len(encoded) % 4
+                    if padding != 4:
+                        encoded += "=" * padding
+                    decoded = base64.urlsafe_b64decode(encoded).decode("utf-8")
+                    if decoded.startswith("http"):
+                        return decoded
+        except Exception:
+            pass
+        return None
 
     # Keep old name for backward compatibility
     async def search_duckduckgo(self, query: str) -> list[str]:
