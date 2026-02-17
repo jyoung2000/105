@@ -16,6 +16,7 @@
             <div class="nav-tab" data-tab="jobs">Jobs</div>
             <div class="nav-tab" data-tab="settings">Settings</div>
             <div class="nav-tab" data-tab="baserow">Baserow</div>
+            <div class="nav-tab" data-tab="browse">Browse</div>
             <div class="nav-tab" data-tab="stats">Stats</div>
         </div>
     </nav>
@@ -256,7 +257,34 @@
             </div>
         </div>
 
-        <!-- Tab 7: Stats -->
+        <!-- Tab 7: Browse Baserow -->
+        <div id="tab-browse" class="tab-content">
+            <div id="browse-unconfigured" style="display:none">
+                <div class="empty-state">
+                    <div class="empty-state-icon">&#128450;</div>
+                    <div class="empty-state-text">Baserow not configured</div>
+                    <div class="empty-state-hint">Configure Baserow in the Baserow tab to browse uploaded wallpapers.</div>
+                </div>
+            </div>
+            <div id="browse-main">
+                <div class="browse-toolbar">
+                    <input type="text" id="browse-search" placeholder="Search wallpapers..." style="max-width:300px">
+                    <select id="browse-sort" style="max-width:200px">
+                        <option value="">Newest First</option>
+                        <option value="wallpaperTitle">Title A-Z</option>
+                        <option value="-wallpaperTitle">Title Z-A</option>
+                        <option value="-Width">Widest First</option>
+                        <option value="-Height">Tallest First</option>
+                    </select>
+                    <button class="btn btn-secondary btn-sm" onclick="loadBrowse()">Refresh</button>
+                    <span id="browse-count" style="font-size:0.85rem;color:var(--text-secondary);margin-left:auto"></span>
+                </div>
+                <div class="browse-grid" id="browse-grid"></div>
+                <div class="browse-pagination" id="browse-pagination"></div>
+            </div>
+        </div>
+
+        <!-- Tab 8: Stats -->
         <div id="tab-stats" class="tab-content">
             <div class="stat-grid" id="stats-summary"></div>
             <div class="card">

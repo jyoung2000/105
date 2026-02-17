@@ -26,6 +26,7 @@ function onTabSwitch(tab) {
     if (tab === 'jobs') { loadJobs(); startJobsPolling(); }
     if (tab === 'settings') { loadSettings(); }
     if (tab === 'baserow') { loadBaserowConfig(); }
+    if (tab === 'browse') { loadBrowse(); }
     if (tab === 'stats') { loadStats(); }
 }
 
@@ -764,6 +765,207 @@ async function resetMapping() {
         autoMatchFields();
     } catch (e) { toast('Reset failed', 'error'); }
 }
+
+// ==================== BROWSE BASEROW ====================
+let browsePage = 1;
+const BROWSE_PAGE_SIZE = 40;
+let browseFieldMapping = {};
+
+async function loadBrowse(page) {
+    if (page !== undefined) browsePage = page;
+    else browsePage = 1;
+
+    // Check if Baserow is configured
+    try {
+        const status = await api('/api/baserow/status');
+        if (!status.configured) {
+            document.getElementById('browse-unconfigured').style.display = '';
+            document.getElementById('browse-main').style.display = 'none';
+            return;
+        }
+        document.getElementById('browse-unconfigured').style.display = 'none';
+        document.getElementById('browse-main').style.display = '';
+    } catch (e) {
+        document.getElementById('browse-unconfigured').style.display = '';
+        document.getElementById('browse-main').style.display = 'none';
+        return;
+    }
+
+    const search = document.getElementById('browse-search').value.trim();
+    const sort = document.getElementById('browse-sort').value;
+
+    let url = `/api/baserow/rows?page=${browsePage}&size=${BROWSE_PAGE_SIZE}`;
+    if (search) url += `&search=${encodeURIComponent(search)}`;
+    if (sort) url += `&order_by=${encodeURIComponent(sort)}`;
+
+    try {
+        const data = await api(url);
+        browseFieldMapping = data.field_mapping || {};
+        const rows = data.results || [];
+        const total = data.count || 0;
+        const totalPages = Math.ceil(total / BROWSE_PAGE_SIZE);
+
+        document.getElementById('browse-count').textContent = `${total} wallpapers`;
+        renderBrowseGrid(rows);
+        renderBrowsePagination(browsePage, totalPages, total);
+    } catch (e) {
+        document.getElementById('browse-grid').innerHTML =
+            '<div class="empty-state"><div class="empty-state-icon">&#9888;</div><div class="empty-state-text">Failed to load</div><div class="empty-state-hint">' + esc(e.message) + '</div></div>';
+        document.getElementById('browse-pagination').innerHTML = '';
+        document.getElementById('browse-count').textContent = '';
+    }
+}
+
+function browseField(row, scraperField) {
+    // Use field mapping to get the Baserow column name, then read the value
+    const colName = browseFieldMapping[scraperField] || scraperField;
+    return row[colName];
+}
+
+function browseImageUrl(row) {
+    // Extract the best image URL from the imageFile field
+    const fileField = browseField(row, 'imageFile');
+    if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
+    const file = fileField[0];
+    // Prefer the full URL for viewing
+    return file.url || '';
+}
+
+function browseThumbnailUrl(row) {
+    // Get the smallest usable thumbnail from Baserow file
+    const fileField = browseField(row, 'imageFile');
+    if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
+    const file = fileField[0];
+    // Try thumbnails: small > tiny > original
+    if (file.thumbnails) {
+        if (file.thumbnails.small) return file.thumbnails.small.url;
+        if (file.thumbnails.tiny) return file.thumbnails.tiny.url;
+    }
+    return file.url || '';
+}
+
+function renderBrowseGrid(rows) {
+    const grid = document.getElementById('browse-grid');
+    if (!rows || rows.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">&#128444;</div><div class="empty-state-text">No wallpapers found</div><div class="empty-state-hint">Upload wallpapers by scraping sources, or adjust your search.</div></div>';
+        return;
+    }
+    grid.innerHTML = rows.map(row => {
+        const title = browseField(row, 'wallpaperTitle') || 'Untitled';
+        const width = browseField(row, 'Width') || 0;
+        const height = browseField(row, 'Height') || 0;
+        const thumb = browseThumbnailUrl(row);
+        const isMobile = browseField(row, 'isMobile');
+        const rowId = row.id;
+        return `
+            <div class="browse-item" onclick="showBrowseDetail(${rowId})">
+                <img src="${esc(thumb)}" alt="${esc(title)}" loading="lazy"
+                    onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231e2a4a%22 width=%22200%22 height=%22200%22/></svg>'">
+                <div class="browse-badge">${width}x${height}${isMobile ? ' M' : ''}</div>
+                <div class="browse-overlay">
+                    <div class="browse-overlay-title">${esc(title)}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderBrowsePagination(current, totalPages, total) {
+    const el = document.getElementById('browse-pagination');
+    if (totalPages <= 1) { el.innerHTML = ''; return; }
+
+    let html = '';
+    // Previous button
+    if (current > 1) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="loadBrowse(${current - 1})">&laquo; Prev</button>`;
+    }
+
+    // Page numbers (show max 7 pages around current)
+    const start = Math.max(1, current - 3);
+    const end = Math.min(totalPages, current + 3);
+    if (start > 1) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="loadBrowse(1)">1</button>`;
+        if (start > 2) html += `<span class="browse-page-ellipsis">...</span>`;
+    }
+    for (let i = start; i <= end; i++) {
+        if (i === current) {
+            html += `<button class="btn btn-sm btn-primary browse-page-active">${i}</button>`;
+        } else {
+            html += `<button class="btn btn-sm btn-secondary" onclick="loadBrowse(${i})">${i}</button>`;
+        }
+    }
+    if (end < totalPages) {
+        if (end < totalPages - 1) html += `<span class="browse-page-ellipsis">...</span>`;
+        html += `<button class="btn btn-sm btn-secondary" onclick="loadBrowse(${totalPages})">${totalPages}</button>`;
+    }
+
+    // Next button
+    if (current < totalPages) {
+        html += `<button class="btn btn-sm btn-secondary" onclick="loadBrowse(${current + 1})">Next &raquo;</button>`;
+    }
+
+    el.innerHTML = html;
+}
+
+async function showBrowseDetail(rowId) {
+    try {
+        const row = await api(`/api/baserow/rows/${rowId}`);
+        const fm = row.field_mapping || browseFieldMapping;
+        const getF = (key) => { const col = fm[key] || key; return row[col]; };
+
+        const title = getF('wallpaperTitle') || 'Untitled';
+        const width = getF('Width') || 0;
+        const height = getF('Height') || 0;
+        const imgUrl = getF('imgUrl') || '';
+        const altText = getF('altText') || '';
+        const artist = getF('artistText') || '';
+        const artistLink = getF('artistLink') || '';
+        const tags = getF('categoryTags') || '';
+        const isMobile = getF('isMobile');
+        const imgHash = getF('imgHash') || '';
+
+        // Get full image URL from file field
+        const fileField = getF('imageFile');
+        let fullImgUrl = '';
+        if (fileField && Array.isArray(fileField) && fileField.length > 0) {
+            fullImgUrl = fileField[0].url || '';
+        }
+
+        showModal(`
+            <div class="modal-header">
+                <h3>${esc(title)}</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div style="text-align:center;margin-bottom:1rem">
+                <a href="${esc(fullImgUrl)}" target="_blank">
+                    <img src="${esc(fullImgUrl)}" style="max-width:100%;max-height:60vh;border-radius:6px;cursor:zoom-in" alt="${esc(altText)}">
+                </a>
+            </div>
+            <table>
+                <tr><td style="color:var(--text-secondary)">Title</td><td>${esc(title)}</td></tr>
+                <tr><td style="color:var(--text-secondary)">Alt Text</td><td>${esc(altText)}</td></tr>
+                <tr><td style="color:var(--text-secondary)">Tags</td><td>${esc(tags)}</td></tr>
+                <tr><td style="color:var(--text-secondary)">Resolution</td><td>${width}x${height}</td></tr>
+                <tr><td style="color:var(--text-secondary)">Mobile</td><td>${isMobile ? 'Yes' : 'No'}</td></tr>
+                ${artist ? `<tr><td style="color:var(--text-secondary)">Artist</td><td>${artistLink ? `<a href="${esc(artistLink)}" target="_blank" style="color:var(--accent)">${esc(artist)}</a>` : esc(artist)}</td></tr>` : ''}
+                <tr><td style="color:var(--text-secondary)">Hash</td><td style="font-family:monospace;font-size:0.8rem">${esc(imgHash)}</td></tr>
+                ${imgUrl ? `<tr><td style="color:var(--text-secondary)">Source URL</td><td><a href="${esc(imgUrl)}" target="_blank" style="color:var(--accent)">${esc(imgUrl.substring(0, 60))}...</a></td></tr>` : ''}
+                <tr><td style="color:var(--text-secondary)">Baserow Row</td><td>#${rowId}</td></tr>
+            </table>
+            <div style="margin-top:1rem;text-align:center">
+                <a href="${esc(fullImgUrl)}" download class="btn btn-primary btn-sm" target="_blank">Download Full Size</a>
+            </div>
+        `);
+    } catch (e) { toast('Failed to load wallpaper details', 'error'); }
+}
+
+// Browse search debounce
+let browseSearchTimeout;
+document.getElementById('browse-search').addEventListener('input', () => {
+    clearTimeout(browseSearchTimeout);
+    browseSearchTimeout = setTimeout(() => loadBrowse(), 500);
+});
+document.getElementById('browse-sort').addEventListener('change', () => loadBrowse());
 
 // ==================== STATS ====================
 async function loadStats() {

@@ -405,6 +405,58 @@ async def update_field_mapping(data: FieldMappingUpdate):
     return {"status": "saved", "field_mapping": data.field_mapping}
 
 
+@router.get("/baserow/rows")
+async def list_baserow_rows(page: int = 1, size: int = 50, search: str = "",
+                             order_by: str = ""):
+    """Browse wallpapers stored in Baserow."""
+    cfg = config_store.get_section("baserow")
+    if not (cfg.get("api_url") and cfg.get("api_token") and cfg.get("table_id")):
+        raise HTTPException(400, "Baserow not configured")
+    client = BaserowClient(
+        api_url=cfg.get("api_url", ""),
+        api_token=cfg.get("api_token", ""),
+        table_id=cfg.get("table_id", 0),
+    )
+    client.field_mapping = cfg.get("field_mapping", {})
+    try:
+        data = await client.list_rows(
+            page=page, size=size, search=search, order_by=order_by,
+        )
+        # Include the field mapping so the frontend knows which fields to read
+        data["field_mapping"] = client.field_mapping
+        return data
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch rows: {e}")
+    finally:
+        await client.close()
+
+
+@router.get("/baserow/rows/{row_id}")
+async def get_baserow_row(row_id: int):
+    """Get a single Baserow row by ID."""
+    cfg = config_store.get_section("baserow")
+    if not (cfg.get("api_url") and cfg.get("api_token") and cfg.get("table_id")):
+        raise HTTPException(400, "Baserow not configured")
+    client = BaserowClient(
+        api_url=cfg.get("api_url", ""),
+        api_token=cfg.get("api_token", ""),
+        table_id=cfg.get("table_id", 0),
+    )
+    client.field_mapping = cfg.get("field_mapping", {})
+    try:
+        row = await client.get_row(row_id)
+        if not row:
+            raise HTTPException(404, "Row not found")
+        row["field_mapping"] = client.field_mapping
+        return row
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch row: {e}")
+    finally:
+        await client.close()
+
+
 @router.post("/baserow/field-mapping/reset")
 async def reset_field_mapping():
     config_store.set("baserow", "field_mapping", dict(DEFAULT_FIELD_MAPPING))

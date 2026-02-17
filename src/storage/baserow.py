@@ -169,6 +169,55 @@ class BaserowClient:
             logger.warning(f"Dedup check failed: {e}")
             return False
 
+    async def list_rows(self, page: int = 1, size: int = 50,
+                        search: str = "", order_by: str = "",
+                        filters: dict = None) -> dict:
+        """List rows from the Baserow table with pagination and optional search.
+
+        Returns dict with 'count', 'next', 'previous', 'results'.
+        """
+        if not self.is_configured:
+            return {"count": 0, "results": [], "next": None, "previous": None}
+        try:
+            client = await self._get_client()
+            params = {
+                "user_field_names": "true",
+                "page": page,
+                "size": size,
+            }
+            if search:
+                params["search"] = search
+            if order_by:
+                params["order_by"] = order_by
+            if filters:
+                for key, val in filters.items():
+                    params[key] = val
+            response = await client.get(
+                f"{self.api_url}/api/database/rows/table/{self.table_id}/",
+                params=params,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"List rows failed: {e}")
+            return {"count": 0, "results": [], "next": None, "previous": None, "error": str(e)}
+
+    async def get_row(self, row_id: int) -> dict:
+        """Fetch a single row by ID."""
+        if not self.is_configured:
+            return {}
+        try:
+            client = await self._get_client()
+            response = await client.get(
+                f"{self.api_url}/api/database/rows/table/{self.table_id}/{row_id}/",
+                params={"user_field_names": "true"},
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Get row failed: {e}")
+            return {}
+
     async def close(self):
         if self._client and not self._client.is_closed:
             await self._client.aclose()
