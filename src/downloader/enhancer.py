@@ -14,11 +14,10 @@ from src.utils.logging import setup_logging
 logger = setup_logging("enhancer")
 
 # Standard wallpaper aspect ratios to target, as (w_ratio, h_ratio, label)
+# Only 16:9 and 9:16 — these are the universal wallpaper ratios that work everywhere.
 TARGET_RATIOS = [
     (16, 9, "16:9"),
-    (16, 10, "16:10"),
     (9, 16, "9:16"),
-    (9, 20, "9:20"),
 ]
 
 # Enhancement limits

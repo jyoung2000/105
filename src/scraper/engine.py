@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from src.scraper.browser import browser_manager
 from src.scraper.adapters.generic import GenericAdapter
+from src.scraper.nsfw_filter import is_nsfw_page, is_nsfw_image
 from src.downloader.manager import DownloadManager
 from src.downloader.compressor import ImageCompressor
 from src.downloader.validator import ImageValidator
@@ -202,6 +203,10 @@ class ScraperEngine:
         # Load site profile for this domain — remembers site structure
         profile = site_profiles.get(job.url)
 
+        # Track processed image URLs across all pages in this job to avoid
+        # downloading the same wallpaper multiple times
+        job_seen_urls = set()
+
         current_url = job.url
         consecutive_blocked = 0
         for page_num in range(1, job.max_pages + 1):
@@ -294,13 +299,33 @@ class ScraperEngine:
                     images = []
             else:
                 # No detail links — this might be a detail page itself
-                images = await adapter.scrape(html, current_url)
-                logger.info(f"Found {len(images)} direct images on page {page_num} (no detail links)")
+                allow_nsfw = config_store.get("scraping", "allow_nsfw", default=False)
+                # NSFW page check for direct-image pages
+                if not allow_nsfw and is_nsfw_page(html, current_url):
+                    logger.info(f"Skipping NSFW page: {current_url}")
+                    images = []
+                else:
+                    images = await adapter.scrape(html, current_url)
+                    # Filter NSFW images
+                    if not allow_nsfw:
+                        images = [
+                            img for img in images
+                            if not is_nsfw_image(img.url, alt=img.alt, title=img.title,
+                                                 tags=img.tags, page_url=current_url)
+                        ]
+                    logger.info(f"Found {len(images)} direct images on page {page_num} (no detail links)")
 
             job.images_found += len(images)
 
-            # Process images
+            # Process images (skip already-seen URLs within this job)
             for i, img in enumerate(images):
+                norm_url = self._normalize_image_url(img.url)
+                if norm_url in job_seen_urls:
+                    logger.debug(f"Skipping already-processed image in this job: {img.url[:80]}")
+                    job.duplicates += 1
+                    continue
+                job_seen_urls.add(norm_url)
+
                 try:
                     result = await self._process_image(img, job, validator)
                     if result.status == "uploaded":
@@ -377,8 +402,12 @@ class ScraperEngine:
         Uses the gallery URL as referer (like clicking a thumbnail on the listing page).
         Includes adaptive back-off: if consecutive pages return 0 images (likely
         blocked), the delay between requests increases to avoid triggering anti-bot.
+        Deduplicates images across detail pages so each unique image URL is only
+        returned once, at its highest resolution.
         """
         all_images = []
+        seen_image_urls = set()  # Track image URLs across all detail pages
+        allow_nsfw = config_store.get("scraping", "allow_nsfw", default=False)
         max_details = config_store.get("scraping", "max_pages", default=10)
         # Limit detail pages per listing page to avoid runaway scraping
         links_to_visit = detail_links[:min(len(detail_links), max_details * 3)]
@@ -416,6 +445,13 @@ class ScraperEngine:
                     await asyncio.sleep(backoff)
                     continue
 
+                # NSFW page check — skip entire page if NSFW and not allowed
+                if not allow_nsfw and is_nsfw_page(html, detail_url):
+                    logger.info(f"Skipping NSFW detail page: {detail_url}")
+                    if profile:
+                        profile.mark_visited(detail_url)
+                    continue
+
                 images = await adapter.scrape(html, detail_url)
 
                 # Mark page as visited in site profile
@@ -424,14 +460,30 @@ class ScraperEngine:
 
                 if images:
                     consecutive_failures = 0  # Reset on success
-                    # Carry forward metadata from the thumbnail link
+                    # Deduplicate: skip images whose base URL we've already seen
+                    # from another detail page (same wallpaper, different page)
+                    unique_images = []
                     for img in images:
+                        base_url = self._normalize_image_url(img.url)
+                        if base_url in seen_image_urls:
+                            logger.debug(f"Skipping duplicate image across detail pages: {img.url[:80]}")
+                            continue
+                        # NSFW image check
+                        if not allow_nsfw and is_nsfw_image(
+                            img.url, alt=img.alt, title=img.title,
+                            tags=img.tags, page_url=detail_url
+                        ):
+                            logger.info(f"Skipping NSFW image: {img.url[:80]}")
+                            continue
+                        seen_image_urls.add(base_url)
+                        # Carry forward metadata from the thumbnail link
                         if not img.alt and link_info.get("alt"):
                             img.alt = link_info["alt"]
                         if not img.title and link_info.get("title"):
                             img.title = link_info["title"]
-                    all_images.extend(images)
-                    logger.info(f"Found {len(images)} images on detail page {detail_url}")
+                        unique_images.append(img)
+                    all_images.extend(unique_images)
+                    logger.info(f"Found {len(unique_images)} unique images on detail page {detail_url} ({len(images) - len(unique_images)} duplicates skipped)")
 
                     # Record hints about what worked on this site
                     if profile:
@@ -612,6 +664,23 @@ class ScraperEngine:
                         tf.unlink()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _normalize_image_url(url: str) -> str:
+        """Normalize an image URL for deduplication.
+
+        Extracts the base filename, stripping quality/size path segments so that
+        different-quality versions of the same wallpaper map to the same key.
+        e.g., /wallpaper/nbig/foo.webp and /wallpaper/big/foo.webp → foo.webp
+        """
+        parsed = urlparse(url)
+        path = parsed.path.rstrip("/")
+        # Extract just the filename (last path segment)
+        filename = path.rsplit("/", 1)[-1] if "/" in path else path
+        # Strip common dimension suffixes like _1920x1080, -800x600
+        filename = re.sub(r"[_-]\d{3,5}x\d{3,5}", "", filename)
+        # Strip query params for dedup purposes
+        return filename.lower() if filename else url.lower()
 
     # Regex for stripping site names and junk from scraped HTML metadata
     _SITE_NAME_RE = re.compile(

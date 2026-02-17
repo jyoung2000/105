@@ -301,6 +301,10 @@ class GenericAdapter(BaseAdapter):
         if targeted_images:
             images = targeted_images + images
 
+        # Deduplicate: multiple quality/size versions of the same wallpaper
+        # can appear on a single page. Keep only the best (highest score/area).
+        images = self._deduplicate_images(images)
+
         # Sort by score (highest first) and return
         images.sort(key=lambda x: x.width * x.height if x.width and x.height else 0, reverse=True)
         logger.info(f"Found {len(images)} potential wallpapers on {page_url}")
@@ -916,6 +920,56 @@ class GenericAdapter(BaseAdapter):
             height=height,
             page_url=page_url,
         )
+
+    def _deduplicate_images(self, images: list[ScrapedImage]) -> list[ScrapedImage]:
+        """Deduplicate images that are different quality/size versions of the same wallpaper.
+
+        Groups images by their base filename (stripping size/quality path segments),
+        then keeps only the highest-scoring version from each group.
+        """
+        if len(images) <= 1:
+            return images
+
+        groups: dict[str, list[ScrapedImage]] = {}
+        for img in images:
+            key = self._image_base_key(img.url)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(img)
+
+        deduped = []
+        for key, group in groups.items():
+            if len(group) == 1:
+                deduped.append(group[0])
+            else:
+                # Pick the best: prefer largest area, then highest URL score
+                best = max(group, key=lambda i: (
+                    i.width * i.height if i.width and i.height else 0,
+                    self._score_url(i.url),
+                ))
+                deduped.append(best)
+                if len(group) > 1:
+                    logger.debug(
+                        f"Deduped {len(group)} versions of '{key}' → kept {best.url[:80]}"
+                    )
+        return deduped
+
+    @staticmethod
+    def _image_base_key(url: str) -> str:
+        """Extract a deduplication key from an image URL.
+
+        Strips quality/size path segments and dimensions so that different
+        versions of the same image produce the same key.
+        e.g., /wallpaper/nbig/foo-bar.webp → foo-bar.webp
+              /wallpaper/big/foo-bar.webp  → foo-bar.webp
+        """
+        parsed = urlparse(url)
+        path = parsed.path.rstrip("/")
+        # Get filename
+        filename = path.rsplit("/", 1)[-1] if "/" in path else path
+        # Strip dimension suffixes like _1920x1080, -800x600
+        filename = re.sub(r"[_-]\d{3,5}x\d{3,5}", "", filename)
+        return filename.lower()
 
     def discover_categories(self, html: str, page_url: str) -> list[dict]:
         """Find category, tag, and collection navigation links on a page.

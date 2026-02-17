@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
         "watermark_detection": True,
         "enhance_near_miss": True,
         "max_enhance_upscale": 2.5,
+        "allow_nsfw": False,
     },
     "jpeg": {
         "quality": 85,
