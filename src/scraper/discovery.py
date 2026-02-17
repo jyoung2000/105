@@ -17,7 +17,8 @@ BLOCKED_DOMAINS = {
     "instagram.com", "reddit.com", "pinterest.com", "amazon.com", "ebay.com",
     "wikipedia.org", "tiktok.com", "linkedin.com", "duckduckgo.com",
 }
-MIN_VALIDATION_SCORE = 3
+MIN_VALIDATION_SCORE = 1
+MAX_QUERIES_PER_RUN = 3
 
 
 class DiscoveryEngine:
@@ -51,64 +52,86 @@ class DiscoveryEngine:
                     return []
                 logger.info("Browser initialized successfully for discovery")
 
-            # Get next query from rotation
-            query_data = source_manager.get_next_query()
-            if not query_data:
-                logger.info("No enabled discovery queries")
-                return []
+            # Try multiple queries per discovery run for better results
+            total_new_sources = 0
+            queries_tried = 0
+            used_query_ids = set()
 
-            query_text = query_data["query"]
-            query_id = query_data["id"]
-            logger.info(f"Discovery using query: '{query_text}'")
+            while queries_tried < MAX_QUERIES_PER_RUN:
+                query_data = source_manager.get_next_query()
+                if not query_data:
+                    logger.info("No enabled discovery queries")
+                    break
 
-            # Search DuckDuckGo
-            urls = await browser_manager.search_duckduckgo(query_text)
-            logger.info(f"Found {len(urls)} candidate URLs")
+                query_id = query_data["id"]
+                # Avoid re-using the same query in one run
+                if query_id in used_query_ids:
+                    queries_tried += 1
+                    continue
+                used_query_ids.add(query_id)
 
-            new_sources = 0
-            for url in urls:
-                try:
-                    domain = urlparse(url).netloc
-                    # Skip blocked and known domains
-                    if any(blocked in domain for blocked in BLOCKED_DOMAINS):
-                        continue
-                    if source_manager.domain_exists(domain):
-                        continue
+                query_text = query_data["query"]
+                queries_tried += 1
+                logger.info(f"Discovery query {queries_tried}/{MAX_QUERIES_PER_RUN}: '{query_text}'")
 
-                    # Validate: load page and count wallpaper images
-                    score = await self._validate_source(url)
-                    result = {
-                        "url": url,
-                        "domain": domain,
-                        "score": score,
-                        "added": False,
-                        "query": query_text,
-                        "timestamp": datetime.now().isoformat(),
-                    }
+                # Search DuckDuckGo
+                urls = await browser_manager.search_duckduckgo(query_text)
+                logger.info(f"Found {len(urls)} candidate URLs for '{query_text}'")
 
-                    if score >= MIN_VALIDATION_SCORE:
-                        source = source_manager.add_source(
-                            url=url,
-                            name=f"{domain} (discovered)",
-                            category="discovered",
-                            discovered_by_query=query_text,
-                            validation_score=score,
-                        )
-                        result["added"] = True
-                        result["source_id"] = source["id"]
-                        new_sources += 1
-                        logger.info(f"Discovered new source: {domain} (score={score})")
+                new_sources = 0
+                for url in urls:
+                    try:
+                        domain = urlparse(url).netloc
+                        # Skip blocked and known domains
+                        if any(blocked in domain for blocked in BLOCKED_DOMAINS):
+                            continue
+                        if source_manager.domain_exists(domain):
+                            continue
 
-                    results.append(result)
+                        # Validate: load page and count wallpaper images + detail links
+                        score = await self._validate_source(url)
+                        result = {
+                            "url": url,
+                            "domain": domain,
+                            "score": score,
+                            "added": False,
+                            "query": query_text,
+                            "timestamp": datetime.now().isoformat(),
+                        }
 
-                except Exception as e:
-                    logger.warning(f"Error validating {url}: {e}")
+                        if score >= MIN_VALIDATION_SCORE:
+                            source = source_manager.add_source(
+                                url=url,
+                                name=f"{domain} (discovered)",
+                                category="discovered",
+                                discovered_by_query=query_text,
+                                validation_score=score,
+                            )
+                            result["added"] = True
+                            result["source_id"] = source["id"]
+                            new_sources += 1
+                            logger.info(f"Discovered new source: {domain} (score={score})")
 
-                # Be polite between validations (randomized)
-                await asyncio.sleep(3 + random.random() * 3)
+                        results.append(result)
 
-            # Record query usage
-            source_manager.record_query_use(query_id, new_sources)
+                    except Exception as e:
+                        logger.warning(f"Error validating {url}: {e}")
+
+                    # Be polite between validations (randomized)
+                    await asyncio.sleep(3 + random.random() * 3)
+
+                # Record query usage
+                source_manager.record_query_use(query_id, new_sources)
+                total_new_sources += new_sources
+
+                # If we found new sources, stop trying more queries
+                if new_sources > 0:
+                    logger.info(f"Found {new_sources} new sources with '{query_text}', stopping query loop")
+                    break
+
+                # Brief pause between queries
+                await asyncio.sleep(2 + random.random() * 2)
+
             # Only stamp discovery as "run" if we actually evaluated URLs
             if results:
                 source_manager.update_discovery_state(
@@ -118,10 +141,10 @@ class DiscoveryEngine:
                 logger.info("Discovery produced no results, will retry on next cycle")
 
             self._last_results = results[-10:]
-            logger.info(f"Discovery complete: {new_sources} new sources from '{query_text}'")
+            logger.info(f"Discovery complete: {total_new_sources} new sources from {queries_tried} queries")
 
             # Auto-generate new queries based on productive discoveries
-            if new_sources > 0:
+            if total_new_sources > 0:
                 try:
                     self._generate_new_queries()
                 except Exception as e:
@@ -135,13 +158,20 @@ class DiscoveryEngine:
         return results
 
     async def _validate_source(self, url: str) -> float:
-        """Validate a URL as a wallpaper source. Returns score."""
+        """Validate a URL as a wallpaper source. Returns score.
+
+        Score combines direct images found + half-credit for detail page links
+        (thumbnail-wrapped links to same-domain pages). Pagination gives 1.5x bonus.
+        """
         try:
             adapter = self._get_adapter()
             html = await browser_manager.get_page_content(url, wait_time=4000)
             images = await adapter.scrape(html, url)
+            detail_links = adapter.get_detail_page_links(html, url)
 
-            score = len(images)
+            # Direct images count fully, detail page links count as 0.5 each
+            score = len(images) + len(detail_links) * 0.5
+            logger.info(f"Validation {url}: {len(images)} images, {len(detail_links)} detail links, base score={score}")
 
             # Pagination bonus
             next_page = await adapter.get_next_page_url(html, url, 1)

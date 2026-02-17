@@ -147,7 +147,7 @@ class Scheduler:
         if not disc.get("enabled", True):
             return
 
-        interval = disc.get("interval_hours", 24)
+        interval = disc.get("interval_hours", 6)
         last_run = disc.get("last_discovery_run")
 
         should_run = False

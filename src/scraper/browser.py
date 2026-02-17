@@ -167,21 +167,64 @@ class BrowserManager:
                 await page.wait_for_timeout(jitter(500))
                 await page.keyboard.press("Enter")
             else:
-                # Fallback: direct URL
+                logger.warning("DDG search input not found, using direct URL")
                 search_url = f"https://duckduckgo.com/?q={query.replace(' ', '+')}"
                 await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
 
             await page.wait_for_timeout(jitter(3000))
 
-            links = await page.query_selector_all("a[data-testid='result-title-a']")
+            # Try multiple selector strategies (DDG changes layouts frequently)
+            links = []
+            matched_selector = "none"
+            selectors = [
+                ("a[data-testid='result-title-a']", "modern"),
+                ("article a[href]", "article"),
+                ("#links a.result__a", "classic"),
+                ("ol.react-results--main a[href]", "react"),
+                ("a[rel='noopener'][href^='http']", "noopener"),
+                ("h2 a[href^='http']", "h2-links"),
+            ]
+            for selector, name in selectors:
+                links = await page.query_selector_all(selector)
+                if links:
+                    matched_selector = name
+                    break
+
+            # Ultimate fallback: all external links on the page
             if not links:
-                links = await page.query_selector_all("article a[href]")
-            if not links:
-                links = await page.query_selector_all("#links a.result__a")
-            for link in links[:15]:
+                links = await page.query_selector_all("a[href^='http']")
+                matched_selector = "all-links-fallback"
+
+            # Filter DDG internal links, social media, etc.
+            skip_domains = {"duckduckgo.com", "duck.co", "spreadprivacy.com",
+                            "google.com", "facebook.com", "twitter.com", "x.com",
+                            "youtube.com", "instagram.com", "linkedin.com", "tiktok.com"}
+            for link in links[:30]:
                 href = await link.get_attribute("href")
-                if href and href.startswith("http") and "duckduckgo" not in href:
-                    urls.append(href)
+                if href and href.startswith("http"):
+                    try:
+                        domain = urlparse(href).netloc.lower()
+                        if not any(skip in domain for skip in skip_domains):
+                            if href not in urls:
+                                urls.append(href)
+                    except Exception:
+                        pass
+                if len(urls) >= 15:
+                    break
+
+            logger.info(f"DDG search '{query}': {len(urls)} URLs via '{matched_selector}'")
+
+            # Check for potential block/captcha
+            if len(urls) == 0:
+                try:
+                    page_text = await page.inner_text("body")
+                    if "captcha" in page_text.lower() or "unusual traffic" in page_text.lower():
+                        logger.warning("DDG may be blocking: detected captcha/unusual traffic text")
+                    elif len(page_text.strip()) < 200:
+                        logger.warning(f"DDG returned very short page ({len(page_text)} chars), possible block")
+                except Exception:
+                    pass
+
         except Exception as e:
             logger.warning(f"DuckDuckGo search failed for '{query}': {e}")
         finally:

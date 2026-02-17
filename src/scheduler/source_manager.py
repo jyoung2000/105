@@ -38,6 +38,16 @@ DEFAULT_DISCOVERY_QUERIES = [
     {"query": "aesthetic wallpaper HD download", "builtin": True},
     {"query": "space wallpaper 4k free", "builtin": True},
     {"query": "car wallpaper HD download site", "builtin": True},
+    {"query": "free wallpaper gallery website no login", "builtin": True},
+    {"query": "wallpaper download site 1920x1080", "builtin": True},
+    {"query": "high resolution wallpaper collection free", "builtin": True},
+    {"query": "dual monitor wallpaper download site", "builtin": True},
+    {"query": "photography wallpaper website free download", "builtin": True},
+    {"query": "retro vintage wallpaper desktop HD", "builtin": True},
+    {"query": "movie TV show wallpaper 4k download", "builtin": True},
+    {"query": "cyberpunk neon wallpaper download free", "builtin": True},
+    {"query": "mountain ocean wallpaper 4k site", "builtin": True},
+    {"query": "art illustration wallpaper download HD", "builtin": True},
 ]
 
 
@@ -147,7 +157,7 @@ class SourceManager:
                     self._discovery["known_domains"].append(domain)
             logger.info(f"Seeded {len(SEED_SOURCES)} sources")
 
-        # Only seed queries if none exist
+        # Seed queries if none exist, or add missing builtins to existing list
         if not self._queries:
             for dq in DEFAULT_DISCOVERY_QUERIES:
                 query = DiscoveryQuery(
@@ -159,6 +169,24 @@ class SourceManager:
                 )
                 self._queries.append(query.model_dump())
             logger.info(f"Seeded {len(DEFAULT_DISCOVERY_QUERIES)} discovery queries")
+        else:
+            # Re-seed: add any new builtin queries that don't exist yet
+            existing_texts = {q["query"].lower() for q in self._queries}
+            added = 0
+            for dq in DEFAULT_DISCOVERY_QUERIES:
+                if dq["query"].lower() not in existing_texts:
+                    query = DiscoveryQuery(
+                        id=f"b_{uuid.uuid4().hex[:8]}",
+                        query=dq["query"],
+                        enabled=True,
+                        builtin=True,
+                        added_at=datetime.now().isoformat(),
+                    )
+                    self._queries.append(query.model_dump())
+                    existing_texts.add(dq["query"].lower())
+                    added += 1
+            if added:
+                logger.info(f"Added {added} new builtin discovery queries")
 
         self.save()
 
@@ -203,7 +231,8 @@ class SourceManager:
         )
         d = source.model_dump()
         self._sources.append(d)
-        if domain not in self._discovery["known_domains"]:
+        normalized = self._normalize_domain(domain)
+        if not any(self._normalize_domain(kd) == normalized for kd in self._discovery["known_domains"]):
             self._discovery["known_domains"].append(domain)
         self.save()
         return d
@@ -239,10 +268,22 @@ class SourceManager:
                 return s
         return None
 
+    @staticmethod
+    def _normalize_domain(domain: str) -> str:
+        """Normalize domain for comparison (strip www., lowercase)."""
+        d = domain.lower()
+        if d.startswith("www."):
+            d = d[4:]
+        return d
+
     def domain_exists(self, domain: str) -> bool:
         if not self._loaded:
             self.load()
-        return domain in self._discovery.get("known_domains", [])
+        normalized = self._normalize_domain(domain)
+        return any(
+            self._normalize_domain(d) == normalized
+            for d in self._discovery.get("known_domains", [])
+        )
 
     def record_scrape(self, source_id: str, uploaded: int, dupes: int, errors: int):
         """Record scrape results for a source."""
