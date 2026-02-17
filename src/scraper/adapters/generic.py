@@ -41,10 +41,16 @@ EXCLUDE_PATTERNS = [
     r"[_-]t\.", r"[_-]sq\.", r"[_-]sm\.", r"[_-]xs\.",
     r"\.th\.", r"/tiny/", r"/micro/",
     r"/compressed/", r"/optimized/", r"/resized/",
-    # Stock photo watermarked thumbnails
+    # Stock photo / watermarked image domains
     r"istockphoto\.com", r"gettyimages\.", r"shutterstock\.com",
     r"stock\.adobe\.com", r"depositphotos\.com", r"dreamstime\.com",
-    r"123rf\.com", r"alamy\.com",
+    r"123rf\.com", r"alamy\.com", r"bigstockphoto\.com",
+    r"canstockphoto\.com", r"photodune\.net", r"pond5\.com",
+    r"stockfresh\.com", r"vecteezy\.com/photo", r"freepik\.com",
+    r"rf\.com", r"eyeem\.com", r"500px\.com/photo/.*/licensing",
+    # Watermark URL indicators
+    r"[_-]watermark", r"/watermarked/", r"/comp/", r"/comps/",
+    r"/preview/comp", r"/sample/", r"/demo/",
     # Ad/e-commerce CDN domains (appear as ads on wallpaper sites)
     r"alicdn\.com", r"aliexpress\.com", r"alibaba\.com", r"taobao\.com",
     r"amazon\.com/images", r"ebay\.com", r"shopify\.com",

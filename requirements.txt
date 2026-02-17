@@ -6,6 +6,7 @@ httpx[http2]
 beautifulsoup4
 lxml
 Pillow
+numpy
 imagehash
 pydantic
 pydantic-settings
