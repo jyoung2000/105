@@ -97,7 +97,7 @@ class SourceManager:
         self._queries: list[dict] = []
         self._discovery: dict = {
             "enabled": True,
-            "interval_hours": 6,
+            "interval_hours": 2,
             "last_discovery_run": None,
             "known_domains": [],
             "query_index": 0,

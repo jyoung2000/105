@@ -1,8 +1,10 @@
 """Source discovery engine — finds new wallpaper sources via web search."""
 import asyncio
+import re
 import random
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
 from src.scraper.browser import browser_manager
 from src.scraper.adapters.generic import GenericAdapter
 from src.scheduler.source_manager import source_manager
@@ -18,10 +20,12 @@ BLOCKED_DOMAINS = {
     "wikipedia.org", "tiktok.com", "linkedin.com", "duckduckgo.com",
 }
 MIN_VALIDATION_SCORE = 1
-MAX_QUERIES_PER_RUN = 3
+MAX_QUERIES_PER_RUN = 5
 
-# Known wallpaper sites — used as fallback when search engines return nothing
+# Known wallpaper sites — primary discovery mechanism since search engines
+# are unreliable from Docker containers (rate limits, CAPTCHAs, etc.)
 KNOWN_WALLPAPER_SITES = [
+    # High-quality curated wallpaper sites
     {"url": "https://wallpaperscraft.com/all", "name": "WallpapersCraft"},
     {"url": "https://www.pixel4k.com/latest.html", "name": "Pixel4K"},
     {"url": "https://4kwallpapers.com/", "name": "4KWallpapers"},
@@ -34,6 +38,33 @@ KNOWN_WALLPAPER_SITES = [
     {"url": "https://getwallpapers.com/", "name": "GetWallpapers"},
     {"url": "https://www.uhdpaper.com/", "name": "UHDPaper"},
     {"url": "https://www.wallpaperbetter.com/", "name": "WallpaperBetter"},
+    # Large wallpaper aggregators
+    {"url": "https://wallhaven.cc/latest", "name": "Wallhaven"},
+    {"url": "https://www.wallpaperflare.com/search?wallpaper=nature", "name": "WallpaperFlare"},
+    {"url": "https://www.peakpx.com/en/hd-wallpapers", "name": "PeakPx"},
+    {"url": "https://wallpapercave.com/", "name": "WallpaperCave"},
+    {"url": "https://www.hdwallpapers.net/latest-wallpapers", "name": "HDWallpapers.net"},
+    {"url": "https://www.desktopbackground.org/", "name": "DesktopBackground"},
+    {"url": "https://rare-gallery.com/", "name": "RareGallery"},
+    # Photography / nature focused
+    {"url": "https://unsplash.com/t/wallpapers", "name": "Unsplash Wallpapers"},
+    {"url": "https://www.pexels.com/search/wallpaper/", "name": "Pexels Wallpapers"},
+    {"url": "https://pixabay.com/images/search/wallpaper/", "name": "Pixabay Wallpapers"},
+    # High-res / 4K+ focused
+    {"url": "https://www.bhmpics.com/", "name": "BHMPics"},
+    {"url": "https://www.wallpaperswide.com/", "name": "WallpapersWide"},
+    {"url": "https://www.goodfon.com/catalog/nature/", "name": "Goodfon"},
+    {"url": "https://www.artstation.com/search?sort_by=trending&category=wallpaper", "name": "ArtStation Wallpapers"},
+    # Themed / niche
+    {"url": "https://www.dualmonitorbackgrounds.com/", "name": "DualMonitorBGs"},
+    {"url": "https://www.ultrawidewallpapers.com/", "name": "UltrawideWallpapers"},
+    {"url": "https://www.fonwall.com/en/", "name": "FonWall"},
+    {"url": "https://www.wallpaperhub.app/", "name": "WallpaperHub"},
+    {"url": "https://www.10wallpaper.com/", "name": "10Wallpaper"},
+    {"url": "https://wallpapers.com/", "name": "Wallpapers.com"},
+    {"url": "https://www.nawpic.com/", "name": "NawPic"},
+    {"url": "https://www.backiee.com/", "name": "Backiee"},
+    {"url": "https://www.positrondream.com/wallpapers-all", "name": "PositronDream"},
 ]
 
 
@@ -148,9 +179,11 @@ class DiscoveryEngine:
                 # Brief pause between queries
                 await asyncio.sleep(2 + random.random() * 2)
 
-            # If search returned nothing, try known wallpaper sites as fallback
-            if total_new_sources == 0 and not results:
-                logger.info("Search engines returned no results, trying known wallpaper sites")
+            # Always try known wallpaper sites when search didn't find new sources.
+            # Search engines are unreliable from Docker (rate limits, CAPTCHAs),
+            # so known sites are the primary discovery mechanism.
+            if total_new_sources == 0:
+                logger.info("No new sources from search, trying known wallpaper sites")
                 fallback_urls = self._get_fallback_sites()
                 for url, name in fallback_urls:
                     try:
@@ -185,7 +218,7 @@ class DiscoveryEngine:
 
                         results.append(result)
 
-                        if total_new_sources >= 3:
+                        if total_new_sources >= 5:
                             break
 
                     except Exception as e:
@@ -193,13 +226,12 @@ class DiscoveryEngine:
 
                     await asyncio.sleep(3 + random.random() * 3)
 
-            # Stamp discovery as "run"
-            if results:
-                source_manager.update_discovery_state(
-                    last_discovery_run=datetime.now().isoformat()
-                )
-            else:
-                logger.info("Discovery produced no results, will retry on next cycle")
+            # Always stamp discovery as "run" to avoid tight retry loops
+            source_manager.update_discovery_state(
+                last_discovery_run=datetime.now().isoformat()
+            )
+            if not results and total_new_sources == 0:
+                logger.info("Discovery produced no new sources this cycle")
 
             self._last_results = results[-10:]
             logger.info(f"Discovery complete: {total_new_sources} new sources from {queries_tried} queries")
@@ -255,7 +287,7 @@ class DiscoveryEngine:
             domain = urlparse(url).netloc
             if not source_manager.domain_exists(domain):
                 result.append((url, name))
-        return result[:5]  # Try up to 5 new sites per fallback run
+        return result[:8]  # Try up to 8 new sites per discovery run
 
     def _generate_new_queries(self):
         """Generate new search queries based on productive discovered sources."""
@@ -282,6 +314,79 @@ class DiscoveryEngine:
                     existing_queries.add(candidate.lower())
                     logger.info(f"Auto-generated query: '{candidate}'")
                     break  # One new query per productive source
+
+    def discover_outbound_links(self, html: str, page_url: str) -> list[dict]:
+        """Find links to other wallpaper sites while scraping a page.
+
+        Looks for outbound links (different domain) that point to wallpaper-related
+        sites — blogrolls, "similar sites" sections, partner links, etc.
+        Returns list of {"url": str, "domain": str} for new wallpaper domains.
+        """
+        soup = BeautifulSoup(html, "lxml")
+        page_parsed = urlparse(page_url)
+        page_root = self._root_domain(page_parsed.netloc)
+        found = []
+        seen_domains = set()
+
+        # Wallpaper-related URL/text indicators
+        wallpaper_hints = re.compile(
+            r"wallpaper|background|desktop|hd.?image|4k|uhd|"
+            r"screen.?saver|wall.?art|backdrop",
+            re.I
+        )
+
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if not href or href.startswith("#") or href.startswith("javascript:"):
+                continue
+
+            abs_url = urljoin(page_url, href)
+            try:
+                link_parsed = urlparse(abs_url)
+                if not link_parsed.netloc:
+                    continue
+                link_root = self._root_domain(link_parsed.netloc)
+
+                # Only outbound links (different domain)
+                if link_root == page_root:
+                    continue
+                if link_root in seen_domains:
+                    continue
+
+                # Skip blocked domains
+                if any(blocked in link_parsed.netloc for blocked in BLOCKED_DOMAINS):
+                    continue
+
+                # Skip already-known domains
+                if source_manager.domain_exists(link_parsed.netloc):
+                    continue
+
+                # Check if the link looks wallpaper-related
+                text = link.get_text(strip=True)
+                title = link.get("title", "") or ""
+                combined = f"{abs_url} {text} {title}"
+
+                if wallpaper_hints.search(combined):
+                    seen_domains.add(link_root)
+                    found.append({
+                        "url": abs_url,
+                        "domain": link_parsed.netloc,
+                    })
+
+            except Exception:
+                continue
+
+        if found:
+            logger.info(f"Found {len(found)} outbound wallpaper links on {page_url}")
+        return found
+
+    @staticmethod
+    def _root_domain(netloc: str) -> str:
+        """Extract root domain from netloc."""
+        parts = netloc.lower().split(".")
+        if len(parts) >= 2:
+            return ".".join(parts[-2:])
+        return netloc.lower()
 
     @property
     def is_running(self) -> bool:

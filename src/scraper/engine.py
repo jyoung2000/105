@@ -17,6 +17,7 @@ from src.storage.baserow import BaserowClient
 from src.storage.config_store import config_store
 from src.storage.activity_store import ActivityStore, ActivityEntry, activity_store
 from src.storage.site_profiles import site_profiles
+from src.scraper.discovery import discovery_engine
 from src.metadata.schemas import WallpaperMetadata
 from src.utils.aspect_ratio import calculate_aspect_ratio, is_mobile
 from src.utils.paths import data_path
@@ -215,6 +216,23 @@ class ScraperEngine:
                     logger.info(f"Discovered {len(cats)} category/collection links on {current_url}")
             except Exception as e:
                 logger.debug(f"Category discovery error: {e}")
+
+            # Discover outbound links to other wallpaper sites (passive discovery)
+            try:
+                outbound = discovery_engine.discover_outbound_links(html, current_url)
+                for ob in outbound[:3]:  # Limit to 3 per page to avoid spam
+                    from src.scheduler.source_manager import source_manager as sm
+                    if not sm.domain_exists(ob["domain"]):
+                        sm.add_source(
+                            url=ob["url"],
+                            name=f"{ob['domain']} (outbound)",
+                            category="discovered",
+                            discovered_by_query="(outbound-link)",
+                            validation_score=0,  # Will be validated on first scrape
+                        )
+                        logger.info(f"Auto-added outbound wallpaper site: {ob['domain']}")
+            except Exception as e:
+                logger.debug(f"Outbound link discovery error: {e}")
 
             # Check for detail page links FIRST — listing pages have thumbnails
             # linking to detail pages where full-size images live.
