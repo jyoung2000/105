@@ -107,7 +107,10 @@
                     <span class="status-dot" id="scheduler-dot"></span>
                     <span id="scheduler-text">Scheduler: Loading...</span>
                 </div>
-                <button class="btn btn-sm btn-secondary" id="scheduler-toggle-btn" onclick="toggleScheduler()">Pause</button>
+                <div style="display:flex;gap:0.5rem">
+                    <button class="btn btn-sm btn-secondary" id="scheduler-toggle-btn" onclick="toggleScheduler()">Pause</button>
+                    <button class="btn btn-sm btn-danger" id="stop-all-btn" onclick="stopAll()">Stop All</button>
+                </div>
             </div>
 
             <div class="scraping-banner" id="scraping-banner" style="display:none">
@@ -118,11 +121,12 @@
                         <div class="scraping-banner-detail" id="scraping-banner-detail"></div>
                     </div>
                 </div>
-                <div class="scraping-banner-progress">
+                <div class="scraping-banner-progress" style="display:flex;align-items:center;gap:0.75rem">
                     <div class="progress" style="width:200px">
                         <div class="progress-bar" id="scraping-banner-progress-bar"></div>
                     </div>
                     <span class="scraping-banner-stats" id="scraping-banner-stats"></span>
+                    <button class="btn btn-sm btn-danger" onclick="cancelJob()" title="Cancel current job">Cancel</button>
                 </div>
             </div>
 

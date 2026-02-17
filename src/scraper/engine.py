@@ -93,6 +93,7 @@ class ScraperEngine:
         self._job_lock = asyncio.Lock()
         self._current_job: Optional[ScrapeJob] = None
         self._job_history: list[dict] = []
+        self._cancel_requested = False
 
     def _get_adapter(self) -> GenericAdapter:
         """Get adapter configured with current scraping settings."""
@@ -154,6 +155,15 @@ class ScraperEngine:
         )
         self.baserow.field_mapping = cfg.get("field_mapping", {})
 
+    def cancel(self):
+        """Request cancellation of the current job. The pipeline checks this flag
+        at each page/detail-page iteration and stops gracefully."""
+        if self._current_job and self._current_job.status == "running":
+            self._cancel_requested = True
+            logger.info(f"Cancellation requested for job {self._current_job.id}")
+            return True
+        return False
+
     async def scrape_url(self, url: str, source_id: str = "", source_name: str = "", max_pages: int = 10) -> ScrapeJob:
         """Scrape a URL and process all found wallpapers."""
         job_id = uuid.uuid4().hex[:12]
@@ -164,6 +174,7 @@ class ScraperEngine:
                 job.status = "queued"
                 return job
 
+        self._cancel_requested = False
         job.status = "running"
         job.started_at = datetime.now().isoformat()
         self._current_job = job
@@ -175,7 +186,9 @@ class ScraperEngine:
             job.error_log.append(str(e))
             job.errors += 1
         finally:
-            job.status = "completed"
+            was_cancelled = self._cancel_requested
+            self._cancel_requested = False
+            job.status = "cancelled" if was_cancelled else "completed"
             job.completed_at = datetime.now().isoformat()
             job.progress = 100.0
             self._job_history.append(job.to_dict())
@@ -210,6 +223,9 @@ class ScraperEngine:
         current_url = job.url
         consecutive_blocked = 0
         for page_num in range(1, job.max_pages + 1):
+            if self._cancel_requested:
+                logger.info("Cancellation requested — stopping scrape")
+                break
             logger.info(f"Scraping page {page_num}: {current_url}")
             job.pages_scraped = page_num
 
@@ -321,6 +337,8 @@ class ScraperEngine:
 
                 # Process images (skip already-seen URLs within this job)
                 for i, img in enumerate(images):
+                    if self._cancel_requested:
+                        break
                     norm_url = self._normalize_image_url(img.url)
                     if norm_url in job_seen_urls:
                         logger.debug(f"Skipping already-processed image in this job: {img.url[:80]}")
@@ -424,6 +442,9 @@ class ScraperEngine:
         base_delay = 3.0  # seconds — starts at 3-5s, increases on failures
 
         for i, link_info in enumerate(links_to_visit):
+            if self._cancel_requested:
+                logger.info("Cancellation requested — stopping detail page crawl")
+                break
             detail_url = link_info["url"]
             try:
                 logger.info(f"Visiting detail page {i+1}/{len(links_to_visit)}: {detail_url}")

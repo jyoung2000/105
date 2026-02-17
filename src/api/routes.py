@@ -260,6 +260,27 @@ async def scheduler_resume():
     return {"status": "resumed"}
 
 
+@router.post("/jobs/cancel")
+async def cancel_current_job():
+    """Cancel the currently running scrape job."""
+    cancelled = scraper_engine.cancel()
+    if cancelled:
+        return {"status": "cancelling", "message": "Job cancellation requested"}
+    return {"status": "no_job", "message": "No running job to cancel"}
+
+
+@router.post("/stop-all")
+async def stop_all():
+    """Emergency stop: pause scheduler + cancel current job + stop discovery."""
+    scheduler.pause()
+    job_cancelled = scraper_engine.cancel()
+    return {
+        "status": "stopped",
+        "scheduler_paused": True,
+        "job_cancelled": job_cancelled,
+    }
+
+
 @router.get("/discovery/status")
 async def discovery_status():
     return {

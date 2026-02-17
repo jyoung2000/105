@@ -648,6 +648,28 @@ async function toggleScheduler() {
     } catch (e) { toast('Failed', 'error'); }
 }
 
+// ==================== STOP ALL / CANCEL JOB ====================
+async function stopAll() {
+    if (!confirm('Stop all scraping activity? This will pause the scheduler and cancel the current job.')) return;
+    try {
+        const data = await api('/api/stop-all', { method: 'POST' });
+        toast('All scraping stopped', 'success');
+        loadSchedulerStatus();
+        loadLiveStatus();
+    } catch (e) { toast('Stop failed: ' + e.message, 'error'); }
+}
+
+async function cancelJob() {
+    try {
+        const data = await api('/api/jobs/cancel', { method: 'POST' });
+        if (data.status === 'cancelling') {
+            toast('Cancelling current job...', 'info');
+        } else {
+            toast('No running job to cancel', 'info');
+        }
+    } catch (e) { toast('Cancel failed: ' + e.message, 'error'); }
+}
+
 // ==================== LIVE STATUS ====================
 function startSourcesPolling() {
     sourcesPolling = setInterval(loadLiveStatus, 5000);
