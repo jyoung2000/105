@@ -419,9 +419,24 @@ async def baserow_image_proxy(url: str = Query(..., description="Baserow file UR
     # Resolve relative URLs against the Baserow API URL
     if url.startswith("/"):
         url = api_url.rstrip("/") + url
-    # Only proxy URLs from the configured Baserow host
-    if not url.startswith(api_url.rstrip("/")):
-        raise HTTPException(400, "URL does not belong to configured Baserow instance")
+
+    # Security check: only proxy Baserow media paths, not arbitrary URLs.
+    # Self-hosted Baserow may return URLs with internal hostnames (e.g.,
+    # http://localhost:8000/media/...) so we check the path, not just the origin.
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    api_parsed = urlparse(api_url)
+    is_media_path = parsed.path.startswith("/media/") or parsed.path.startswith("/api/user-files/")
+    is_same_host = parsed.netloc == api_parsed.netloc
+    is_known_baserow_host = url.startswith(api_url.rstrip("/"))
+
+    if not (is_known_baserow_host or (is_media_path and is_same_host)):
+        # If the host doesn't match but it's a Baserow media path, re-route
+        # through the configured API URL (handles internal Docker hostnames)
+        if is_media_path:
+            url = api_url.rstrip("/") + parsed.path
+        else:
+            raise HTTPException(400, "URL does not belong to configured Baserow instance")
 
     try:
         async with httpx.AsyncClient(

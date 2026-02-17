@@ -831,23 +831,41 @@ function proxyImgUrl(rawUrl) {
     if (rawUrl.startsWith('/')) {
         rawUrl = browseApiUrl.replace(/\/+$/, '') + rawUrl;
     }
+    // If the URL has a different origin than our Baserow api_url (e.g., internal
+    // Docker hostname), replace the origin with the configured api_url
+    if (browseApiUrl && rawUrl.startsWith('http')) {
+        try {
+            const urlObj = new URL(rawUrl);
+            const apiObj = new URL(browseApiUrl);
+            if (urlObj.host !== apiObj.host) {
+                rawUrl = apiObj.origin + urlObj.pathname + urlObj.search;
+            }
+        } catch (e) { /* keep rawUrl as-is */ }
+    }
     return '/api/baserow/image-proxy?url=' + encodeURIComponent(rawUrl);
+}
+
+function browseFileUrl(file) {
+    // Extract best URL from a Baserow file object. Tries multiple sources
+    // since self-hosted Baserow may return internal URLs or omit url entirely.
+    if (!file) return '';
+    // 1. Try file.url (standard Baserow response)
+    if (file.url) return file.url;
+    // 2. Construct from file.name using known Baserow media path
+    if (file.name) return '/media/user_files/' + file.name;
+    return '';
 }
 
 function browseImageUrl(row) {
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
-    const file = fileField[0];
-    return proxyImgUrl(file.url || '');
+    return proxyImgUrl(browseFileUrl(fileField[0]));
 }
 
 function browseThumbnailUrl(row) {
     const fileField = browseField(row, 'imageFile');
     if (!fileField || !Array.isArray(fileField) || fileField.length === 0) return '';
-    const file = fileField[0];
-    // Use the full image URL — Baserow's built-in thumbnails are too small (48px)
-    // for gallery cards. The proxy adds caching headers so repeat loads are fast.
-    return proxyImgUrl(file.url || '');
+    return proxyImgUrl(browseFileUrl(fileField[0]));
 }
 
 function renderBrowseGrid(rows) {
@@ -934,13 +952,12 @@ async function showBrowseDetail(rowId) {
         // Get full image URL from file field, proxied through our backend
         const fileField = getF('imageFile');
         let fullImgUrl = '';
-        let rawImgUrl = '';
         if (fileField && Array.isArray(fileField) && fileField.length > 0) {
-            rawImgUrl = fileField[0].url || '';
-            if (rawImgUrl.startsWith('/')) {
-                rawImgUrl = detailApiUrl.replace(/\/+$/, '') + rawImgUrl;
-            }
-            fullImgUrl = '/api/baserow/image-proxy?url=' + encodeURIComponent(rawImgUrl);
+            // Save browseApiUrl temporarily and use the detail-specific api_url
+            const savedApiUrl = browseApiUrl;
+            browseApiUrl = detailApiUrl;
+            fullImgUrl = proxyImgUrl(browseFileUrl(fileField[0]));
+            browseApiUrl = savedApiUrl;
         }
 
         showModal(`
